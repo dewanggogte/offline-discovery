@@ -1,0 +1,37 @@
+# Environment & secrets
+.env.local
+.env
+.twilio-recovery-code
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Test outputs & audio
+*.wav
+test_results.json
+test_results.xlsx
+
+# Logs
+*.log
+call_log.log
+
+# Results (may contain PII)
+results.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc artifacts
+=*
