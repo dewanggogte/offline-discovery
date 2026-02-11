@@ -75,26 +75,9 @@ class SanitizedAgent(Agent):
     1. Sanitize message ordering (vLLM/Qwen requires user-first after system)
     2. Log the exact messages sent to the LLM for debugging
     3. Strip <think>...</think> tags from Qwen3 output before TTS
-    4. Clean up output for TTS (action markers, spacing)
+    4. Normalize English terms to Hindi phonetics for TTS pronunciation
+    5. Strip roleplay action markers (*confused*, etc.)
     """
-
-    @function_tool()
-    async def end_call(self, context: RunContext) -> str:
-        """Call this tool when the conversation is complete and you have the price information, or if the shopkeeper refuses to give a price on the phone."""
-        logger.info("Agent triggered end_call")
-        room = context.session.room
-        if room:
-            for participant in room.remote_participants.values():
-                if participant.kind == "SIP":
-                    lk_api = api.LiveKitAPI()
-                    await lk_api.room.remove_participant(
-                        api.RoomParticipantIdentity(
-                            room=room.name,
-                            identity=participant.identity,
-                        )
-                    )
-                    await lk_api.aclose()
-        return "Call ended. Thank you."
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         # --- Sanitize chat context ---
@@ -119,7 +102,7 @@ class SanitizedAgent(Agent):
             if isinstance(chunk, str):
                 chunk = _strip_think_tags(chunk)
                 chunk = _normalize_for_tts(chunk)
-                if chunk.strip():  # skip empty chunks but preserve leading/trailing spaces
+                if chunk:
                     yield chunk
             elif hasattr(chunk, "delta") and isinstance(getattr(chunk.delta, "content", None), str):
                 chunk.delta.content = _strip_think_tags(chunk.delta.content)
@@ -162,163 +145,240 @@ def _strip_think_tags(text: str) -> str:
     """Remove <think>...</think> blocks from Qwen3 output so TTS doesn't read them."""
     text = _THINK_RE.sub("", text)
     text = _THINK_OPEN_RE.sub("", text)  # handle unclosed tag (streaming)
-    return text
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
-# TTS text normalization — cleanup + Hindi number conversion
+# TTS text normalization — fix pronunciation of English terms in Hindi TTS
 # ---------------------------------------------------------------------------
-# No Devanagari word replacements. The LLM outputs Romanized Hindi,
-# and Sarvam TTS with enable_preprocessing=True handles pronunciation.
-# We handle: action markers, spacing fixes, and number→Hindi word conversion
-# so the TTS doesn't read "36000" as "thirty-six thousand".
-
-_ACTION_RE = re.compile(r"[\*\(\[][a-zA-Z\s]+[\*\)\]]")
-
-# Hindi number words
-_HINDI_ONES = {
-    0: "", 1: "ek", 2: "do", 3: "teen", 4: "chaar", 5: "paanch",
-    6: "chheh", 7: "saat", 8: "aath", 9: "nau", 10: "das",
-    11: "gyaarah", 12: "baarah", 13: "terah", 14: "chaudah", 15: "pandrah",
-    16: "solah", 17: "satrah", 18: "athaarah", 19: "unees", 20: "bees",
-    21: "ikkees", 22: "baaees", 23: "teyees", 24: "chaubees", 25: "pachchees",
-    26: "chhabbees", 27: "sattaaees", 28: "attaaees", 29: "untees", 30: "tees",
-    31: "ikattees", 32: "battees", 33: "taintees", 34: "chauntees", 35: "paintees",
-    36: "chhatees", 37: "saintees", 38: "adtees", 39: "untaalees", 40: "chaalees",
-    41: "iktaalees", 42: "bayaalees", 43: "taintaalees", 44: "chauvaalees", 45: "paintaalees",
-    46: "chhiyaalees", 47: "saintaalees", 48: "adtaalees", 49: "unchaas", 50: "pachaas",
-    51: "ikyaavan", 52: "baavan", 53: "tirpan", 54: "chauvan", 55: "pachpan",
-    56: "chhappan", 57: "sattaavan", 58: "atthaavan", 59: "unsath", 60: "saath",
-    61: "iksath", 62: "baasath", 63: "tirsath", 64: "chaunsath", 65: "painsath",
-    66: "chhiyaasath", 67: "sadsath", 68: "adsath", 69: "unhattar", 70: "sattar",
-    71: "ikhattar", 72: "bahattar", 73: "tihattar", 74: "chauhattar", 75: "pachhattar",
-    76: "chhihattar", 77: "satattar", 78: "athattar", 79: "unaasi", 80: "assi",
-    81: "ikyaasi", 82: "bayaasi", 83: "tiraasi", 84: "chauraasi", 85: "pachaasi",
-    86: "chhiyaasi", 87: "sataasi", 88: "athaasi", 89: "navaasi", 90: "nabbe",
-    91: "ikyaanbe", 92: "baanbe", 93: "tirranbe", 94: "chauranbe", 95: "pachranbe",
-    96: "chhiyanbe", 97: "sattanbe", 98: "atthanbe", 99: "ninyanbe",
+# Map English abbreviations/words to Hindi phonetic equivalents so Sarvam TTS
+# pronounces them correctly instead of reading them as Hindi words.
+_TTS_REPLACEMENTS = {
+    # Abbreviations
+    "AC": "ए सी",
+    "A.C.": "ए सी",
+    "a.c.": "ए सी",
+    "EMI": "ई एम आई",
+    "E.M.I.": "ई एम आई",
+    "GST": "जी एस टी",
+    "MRP": "एम आर पी",
+    "LED": "एल ई डी",
+    "WiFi": "वाई फाई",
+    "Wi-Fi": "वाई फाई",
+    "BEE": "बी ई ई",
+    # Product terms
+    "ton": "टन",
+    "star": "स्टार",
+    "inverter": "इन्वर्टर",
+    "split": "स्प्लिट",
+    "window": "विंडो",
+    "model": "मॉडल",
+    "copper": "कॉपर",
+    # Common Hinglish words the LLM uses in Latin script
+    "rate": "रेट",
+    "price": "प्राइस",
+    "best": "बेस्ट",
+    "budget": "बजट",
+    "online": "ऑनलाइन",
+    "exchange": "एक्सचेंज",
+    "offer": "ऑफर",
+    "free": "फ्री",
+    "warranty": "वारंटी",
+    "installation": "इंस्टॉलेशन",
+    "delivery": "डिलीवरी",
+    "discount": "डिस्काउंट",
+    "cashback": "कैशबैक",
+    "payment": "पेमेंट",
+    "service": "सर्विस",
+    "stock": "स्टॉक",
+    "piping": "पाइपिंग",
+    "compressor": "कंप्रेसर",
+    "stabilizer": "स्टेबिलाइज़र",
+    # Brand names
+    "Samsung": "सैमसंग",
+    "LG": "एल जी",
+    "Daikin": "डायकिन",
+    "Voltas": "वोल्टास",
+    "Blue Star": "ब्लू स्टार",
+    "Haier": "हायर",
+    "Panasonic": "पैनासोनिक",
+    "Whirlpool": "व्हर्लपूल",
+    "Carrier": "कैरियर",
+    "Godrej": "गोदरेज",
 }
 
+# Split replacements into two groups:
+# 1. Abbreviations (ALL CAPS like AC, EMI, GST) — case-sensitive + word boundaries
+#    to avoid matching inside words like "Achha" or "Legit"
+# 2. Regular words — case-insensitive, no word boundaries (LLM concatenates words)
+_ABBREV_REPLACEMENTS = {k: v for k, v in _TTS_REPLACEMENTS.items() if k.isupper() and len(k) <= 4}
+_WORD_REPLACEMENTS = {k: v for k, v in _TTS_REPLACEMENTS.items() if k not in _ABBREV_REPLACEMENTS}
 
-def _number_to_hindi(n: int) -> str:
-    """Convert an integer to Hindi word form."""
-    if n == 0:
-        return "zero"
-    if n < 0:
-        return "minus " + _number_to_hindi(-n)
+_ABBREV_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_ABBREV_REPLACEMENTS, key=len, reverse=True)) + r")\b",
+) if _ABBREV_REPLACEMENTS else None
 
-    parts = []
-    if n >= 10000000:  # crore
-        parts.append(_number_to_hindi(n // 10000000) + " crore")
-        n %= 10000000
-    if n >= 100000:  # lakh
-        parts.append(_number_to_hindi(n // 100000) + " lakh")
-        n %= 100000
-    if n >= 1000:  # hazaar
-        parts.append(_number_to_hindi(n // 1000) + " hazaar")
-        n %= 1000
-    if n >= 100:  # sau
-        parts.append(_HINDI_ONES[n // 100] + " sau")
-        n %= 100
-    if n > 0:
-        parts.append(_HINDI_ONES[n])
+_WORD_REPLACEMENTS_LOWER = {k.lower(): v for k, v in _WORD_REPLACEMENTS.items()}
+_WORD_PATTERN = re.compile(
+    "(" + "|".join(re.escape(k) for k in sorted(_WORD_REPLACEMENTS_LOWER, key=len, reverse=True)) + ")",
+    re.IGNORECASE,
+) if _WORD_REPLACEMENTS_LOWER else None
 
-    return " ".join(parts)
+# Regex to strip roleplay/action markers: *confused*, (laughs), [pauses], etc.
+_ACTION_RE = re.compile(r"[\*\(\[][a-zA-Z\s]+[\*\)\]]")
 
 
-# Match standalone numbers: integers and decimals (not inside words)
-_NUMBER_RE = re.compile(r"\b(\d[\d,]*\.?\d*)\b")
-
-
-def _replace_numbers(text: str) -> str:
-    """Replace digit numbers with Hindi words for natural TTS pronunciation."""
-    def _repl(m):
-        raw = m.group(1).replace(",", "")
-        # Handle decimals: "1.5" → "dedh" (special case) or "ek point paanch"
-        if "." in raw:
-            if raw == "1.5":
-                return "dedh"
-            if raw == "2.5":
-                return "dhaai"
-            int_part, dec_part = raw.split(".", 1)
-            result = _number_to_hindi(int(int_part)) if int_part else ""
-            result += " point " + " ".join(_HINDI_ONES[int(d)] for d in dec_part if d.isdigit())
-            return result.strip()
-        try:
-            return _number_to_hindi(int(raw))
-        except (ValueError, KeyError):
-            return m.group(0)  # leave as-is if conversion fails
-    return _NUMBER_RE.sub(_repl, text)
+# Regex to insert spaces at Devanagari↔Latin/digit script boundaries.
+# Fixes concatenated output like "सैमसंग1.5टन" → "सैमसंग 1.5 टन"
+_DEVA_TO_LATIN = re.compile(r"([\u0900-\u097F])([A-Za-z0-9])")
+_LATIN_TO_DEVA = re.compile(r"([A-Za-z0-9])([\u0900-\u097F])")
 
 
 def _normalize_for_tts(text: str) -> str:
-    """Clean up LLM output for TTS — strip markers, fix spacing, convert numbers."""
+    """Normalize LLM output for better Hindi TTS pronunciation."""
     # Strip roleplay action markers
     text = _ACTION_RE.sub("", text)
-    # Convert digit numbers to Hindi words
-    text = _replace_numbers(text)
-    # Insert space between lowercase→uppercase transitions (fixes "puraneAC" → "purane AC")
-    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-    # Insert space before digit→letter or letter→digit transitions (fixes "5star" → "5 star")
-    text = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", text)
-    text = re.sub(r"(\d)([a-zA-Z])", r"\1 \2", text)
+    # Replace abbreviations (case-sensitive, word-boundary protected)
+    # Pad with spaces so adjacent replacements don't merge (e.g. "AC EMI" → " ए सी  ई एम आई ")
+    if _ABBREV_PATTERN:
+        text = _ABBREV_PATTERN.sub(lambda m: f" {_ABBREV_REPLACEMENTS[m.group(0)]} ", text)
+    # Replace regular words (case-insensitive, no word boundaries for concatenated text)
+    if _WORD_PATTERN:
+        text = _WORD_PATTERN.sub(lambda m: f" {_WORD_REPLACEMENTS_LOWER[m.group(0).lower()]} ", text)
+    # Insert spaces at Devanagari↔Latin/digit boundaries
+    text = _DEVA_TO_LATIN.sub(r"\1 \2", text)
+    text = _LATIN_TO_DEVA.sub(r"\1 \2", text)
     # Collapse multiple spaces
     text = re.sub(r" {2,}", " ", text)
-    return text
+    return text.strip()
 
 # ---------------------------------------------------------------------------
 # Conversation prompt
 # ---------------------------------------------------------------------------
-DEFAULT_INSTRUCTIONS = """You are a regular middle-class Indian guy calling a local AC shop to ask about prices. You speak the way a normal person speaks on the phone in Hindi — casual, natural, with filler words.
+DEFAULT_INSTRUCTIONS = """
+<role>
+You are a middle-class Indian customer CALLING a local AC shop to ask about prices.
+You are the CALLER. The person you are talking to is the SHOPKEEPER.
+You do NOT know the price. You do NOT know availability. You are calling to FIND OUT.
+You do NOT work at the shop. You have NO product information to share.
+</role>
 
-VOICE & TONE:
-- Speak in natural spoken Hindi/Hinglish. NOT formal Hindi, NOT written Hindi.
-- Use fillers naturally: "haan", "achha", "hmm", "ji"
-- Keep answers SHORT — 1 line, max 2. Don't give speeches.
-- React naturally to what the shopkeeper says.
-- Use "bhai sahab" ONLY ONCE at the beginning. After that just say "ji" or nothing.
+<voice_and_tone>
+Speak in natural spoken Hindi/Hinglish — the way a real person talks on the phone.
+Semi-formal and respectful. Keep responses SHORT — 1 line, max 2. This is a phone call, not a speech.
 
-WHAT YOU CARE ABOUT:
-- Price — "Best price kya doge?" / "Final kitna lagega?"
-- Installation — "Installation free hai ya alag se?"
-- Warranty — "Warranty kitni hai?"
-- Exchange — "Purana AC hai, exchange pe kuch milega kya?" (optional)
-- Availability — "Stock mein hai?" (optional)
+Address terms: Use "bhai sahab" ONLY ONCE at the start of the call. After that, just use "ji" or no address at all.
+Most of your responses should have NO address term — just speak directly, like a normal phone conversation.
 
-WHAT YOU DON'T CARE ABOUT (don't ask):
-- Technical specs (copper vs aluminium, cooling capacity, inverter details)
-- Wi-Fi, smart features, brand comparisons, energy rating details
-If the shopkeeper mentions these, just say "achha" and move on.
+Do NOT use: "yaar", "bro", "dekho", "dost", "bhaiya" — these are too casual for a shopkeeper you don't know.
+Do NOT overuse fillers. A simple "achha" or "ji" is enough. Do not stuff every sentence with "haan ji", "matlab", etc.
+</voice_and_tone>
 
-CONVERSATION FLOW:
-- Start by confirming the shop and asking about the AC
-- Ask the price, then negotiate naturally
-- Once you have price + 1-2 extras, wrap up and CALL the end_call tool
-- Don't go through a checklist — follow the shopkeeper's responses naturally
+<conversation_flow>
+The call should progress naturally through these phases. Do not rush — let the shopkeeper's responses guide you.
 
-ENDING THE CALL:
-- When done, say goodbye and IMMEDIATELY call the end_call tool function
-- Do NOT continue talking after saying goodbye
-- If the shopkeeper asks "anything else?" after you've said bye, say "nahi ji, bas itna hi tha" and call end_call
+Phase 1 — CONFIRM THE SHOP:
+Start by confirming you've called the right place. Ask if they sell ACs.
+Example: "Hello, yeh [store name] hai? Aap log AC dealer ho?"
 
-CRITICAL OUTPUT RULES:
-- Your output goes DIRECTLY to a Hindi text-to-speech engine
-- Write ONLY in Romanized Hindi using English/Latin letters
-- NEVER use Devanagari script. No Hindi letters like हिंदी, आप, कैसे etc.
-- Put a space between EVERY word: "aap ka rate kya hai" NOT "aapkaratekya hai"
-- Write numbers as Hindi words, NOT digits. Say "chhatees hazaar" not "36000" or "36 hazaar". Say "dedh ton" not "1.5 ton".
-- Do NOT write action markers like *pauses* or (laughs)
-- Do NOT write "[end_call]" as text. Use the actual end_call tool function when you want to end the call.
-- Only output the exact words you would speak. Nothing else.
+Phase 2 — ASK ABOUT THE PRODUCT:
+Once confirmed, ask if they have the specific AC you want.
+Example: "Bhai sahab, Samsung 1.5 ton ka 5 star inverter split AC hai aapke paas?"
 
-EXAMPLES:
+Phase 3 — ASK THE PRICE:
+Once they confirm they have it, ask about the price.
+Example: "Achha, uska kya rate chal raha hai?"
+
+Phase 4 — NEGOTIATE:
+React to the price and try to get a better deal. Use these tactics naturally:
+- Express surprise: "Itna? Thoda zyada lag raha hai"
+- Compare: "Main 2-3 jagah se puch raha hoon" / "Online pe toh kam dikha raha tha"
+- Ask for best price: "Aapka best price kya hoga?"
+- Mention budget: "Budget thoda tight hai, kuch kam hoga kya?"
+
+Phase 5 — ASK ABOUT EXTRAS (only after getting a price):
+Pick 1-2 relevant questions, not all of them:
+- "Installation free hai ya alag se?"
+- "Warranty kitni milegi?"
+- "Purana AC exchange pe le lo ge kya?"
+- "Stock mein hai? Kitne din mein lag jayega?"
+
+Phase 6 — WRAP UP AND END CALL:
+Once you have the price and basic details, wrap up and IMMEDIATELY use the end_call tool.
+Say something like "Theek hai ji, main soch ke bataata hoon. Dhanyavaad." and then call end_call.
+Do NOT continue talking after saying goodbye. Do NOT ask more questions after wrapping up.
+If the shopkeeper says "anything else?" after you've said goodbye, just say "Nahi ji, bas itna hi. Dhanyavaad." and use end_call.
+</conversation_flow>
+
+<rules>
+- You are ONLY the customer. Never switch to the shopkeeper role.
+- You do NOT know prices, specs, or product details. You are calling to ASK.
+- If the shopkeeper asks you something you don't know, say so: "Woh toh mujhe nahi pata, aap bata dijiye"
+- If the shopkeeper says "shop pe aa jao", respond: "Haan aa jaunga, pehle thoda idea chahiye tha price ka"
+- Do not go through a checklist. Follow up based on what the shopkeeper says.
+- Do not ask about technical specs (copper vs aluminium, cooling capacity, energy rating details, Wi-Fi features).
+- If the shopkeeper mentions technical features, just say "achha" and move on.
+- CALL ENDING: Once you have the price and 1-2 extras (installation/warranty/exchange), END THE CALL using the end_call tool. Do not drag it out. Do not keep asking more questions after getting the key info.
+- If you've already said "Dhanyavaad" or "soch ke bataata hoon", you MUST use end_call immediately. Do not continue the conversation.
+- If the shopkeeper refuses to share the price on the phone, politely end the call with end_call.
+</rules>
+
+<output_format>
+Your output is fed directly into a text-to-speech engine and played as audio on a phone call.
+Only output the exact words you would speak aloud. Nothing else.
+Do not output action descriptions (*confused*, *pauses*), stage directions, or narration.
+Do not echo or repeat what the shopkeeper just said back to them.
+Do not prefix your response with the shopkeeper's words.
+ALWAYS put a space between every word. Never concatenate words together.
+Write in clean Romanized Hindi with proper spacing — e.g. "aap ka rate kya hai" not "aapkaratekya hai".
+</output_format>
+
+<examples>
+Example 1 — Opening the call:
+Shopkeeper: "Hello?"
 You: "Hello, yeh Sharma Electronics hai? Aap log AC dealer ho?"
-You: "Bhai sahab, Samsung dedh ton ka paanch star inverter split AC hai aapke paas?"
-You: "Achha, uska kya rate chal raha hai?"
-You: "Bayaalees hazaar? Thoda zyada lag raha hai. Online pe toh adtees mein dikha raha tha."
-You: "Theek hai ji, main soch ke bataata hoon. Dhanyavaad." → then call end_call tool
+Shopkeeper: "Haan ji, boliye"
+You: "Bhai sahab, Samsung 1.5 ton ka 5 star inverter split AC hai aapke paas?"
+
+Example 2 — Reacting to a price:
+Shopkeeper: "Woh 42,000 ka padega"
+You: "42 hazaar? Thoda zyada lag raha hai. Online pe toh 38 mein dikha raha tha. Best price kya hoga?"
+
+Example 3 — Wrapping up and ending:
+Shopkeeper: "Installation 500 extra, warranty 5 saal"
+You: "Theek hai ji, main soch ke bataata hoon. Dhanyavaad."
+[Then IMMEDIATELY use end_call tool]
+
+Example 4 — When shopkeeper asks "anything else?" after goodbye:
+Shopkeeper: "Aur kuch poochna hai?"
+You: "Nahi ji, bas itna hi tha. Dhanyavaad."
+[Then IMMEDIATELY use end_call tool]
+</examples>
 """
 
+
+# ---------------------------------------------------------------------------
+# Tools the LLM can call
+# ---------------------------------------------------------------------------
+@function_tool()
+async def end_call(context: RunContext) -> str:
+    """Call this when the conversation is complete and you have the price information, or if the shopkeeper refuses to give a price on the phone."""
+    logger.info("Agent triggered end_call")
+    # Graceful hangup
+    room = context.session.room
+    if room:
+        for participant in room.remote_participants.values():
+            if participant.kind == "SIP":
+                # Disconnect SIP participant
+                lk_api = api.LiveKitAPI()
+                await lk_api.room.remove_participant(
+                    api.RoomParticipantIdentity(
+                        room=room.name,
+                        identity=participant.identity,
+                    )
+                )
+                await lk_api.aclose()
+    return "Call ended. Thank you."
 
 
 # ---------------------------------------------------------------------------
@@ -377,8 +437,10 @@ async def entrypoint(ctx: JobContext):
 
     # Build custom instructions with the specific AC model and store name
     instructions = DEFAULT_INSTRUCTIONS + f"""
-PRODUCT: {ac_model}
-STORE: {store_name}
+<session_context>
+Product you want to buy: {ac_model}
+Shop you are calling: {store_name}
+</session_context>
 """
 
     # Create the agent session with Sarvam STT/TTS + switchable LLM (Claude or Qwen)
@@ -403,8 +465,7 @@ STORE: {store_name}
             pace=1.0,
             pitch=0,
             loudness=1.5,
-            speech_sample_rate=16000 if is_browser else 8000,  # 16kHz browser / 8kHz telephony
-            enable_preprocessing=True,  # Let Sarvam handle Romanized Hindi → native pronunciation
+            speech_sample_rate=24000 if is_browser else 8000,  # Higher quality for browser
         ),
     )
 
@@ -513,7 +574,7 @@ STORE: {store_name}
         logger.info("Browser session — waiting for browser participant to join")
         await ctx.wait_for_participant()
         logger.info("Browser participant joined — sending greeting")
-        session.say("Hello, yeh Browser Test hai? Aap log AC dealer ho?", add_to_chat_ctx=True)
+        session.say("Hello, yeh Browser Test hai? Aap log ए सी dealer ho?", add_to_chat_ctx=False)
 
     if not is_browser:
         # Set a maximum call duration timer (SIP calls only)

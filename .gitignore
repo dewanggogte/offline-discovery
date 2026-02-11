@@ -15,12 +15,28 @@ venv/
 test_results.json
 test_results.xlsx
 
+# Call transcripts & recordings (may contain PII)
+transcripts/*.json
+recordings/*.wav
+recordings/*.mp3
+
 # Logs
 *.log
 call_log.log
+logs/*.log
 
 # Results (may contain PII)
 results.json
+
+# Pytest
+.pytest_cache/
+
+# Backups
+v0/
+v1/
+
+# Temp files
+temp.md
 
 # IDE
 .vscode/
