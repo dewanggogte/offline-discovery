@@ -45,126 +45,211 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AC Price Agent</title>
+  <title>CallKaro — AC Price Agent</title>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
+    :root {
+      --bg: #fdfcfb; --text: #2c2c2c; --text-light: #666;
+      --accent: #b85a3b; --accent-hover: #9a4830;
+      --border: #e8e6e3; --surface: #f5f3f0; --surface-dark: #eae7e3;
+      --green: #4a9; --red: #c0392b; --yellow: #b8860b;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f172a; color: #e2e8f0;
-      min-height: 100vh; padding: 0;
+      font-family: "Source Serif 4", Georgia, serif;
+      background: var(--bg); color: var(--text);
+      font-size: 18px; line-height: 1.7; min-height: 100vh;
     }
+
+    /* ---- Site header ---- */
+    .site-header { margin-bottom: 1rem; }
+    .site-header h1 { font-size: 1.5rem; font-weight: 500; margin-bottom: .25rem; }
+    .site-header h1 a { color: var(--text); text-decoration: none; }
+    .site-header h1 a:hover { color: var(--accent); }
 
     /* ---- Tab bar ---- */
     .tab-bar {
-      display: flex; background: #1e293b; border-bottom: 1px solid #334155;
-      position: sticky; top: 0; z-index: 100;
+      display: flex; gap: 2rem;
+      border-bottom: 1px solid var(--border); padding: .5rem 0 0;
     }
     .tab-btn {
-      padding: .75rem 1.5rem; border: none; background: none; color: #64748b;
-      font-size: .9rem; font-weight: 600; cursor: pointer; transition: .15s;
+      padding: .5rem 0; border: none; background: none; color: var(--text-light);
+      font-family: "Source Serif 4", Georgia, serif;
+      font-size: .85rem; font-weight: 500; cursor: pointer; transition: .15s;
+      text-transform: uppercase; letter-spacing: .08em;
       border-bottom: 2px solid transparent;
     }
-    .tab-btn:hover { color: #e2e8f0; }
-    .tab-btn.active { color: #e2e8f0; border-bottom-color: #3b82f6; }
+    .tab-btn:hover { color: var(--accent); }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
 
     /* ---- Voice tab ---- */
-    .voice-wrap { display: flex; justify-content: center; padding: 2rem 1rem; }
-    .card {
-      background: #1e293b; border-radius: 12px; padding: 2rem;
-      max-width: 540px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,.4);
-    }
-    h1 { font-size: 1.4rem; margin-bottom: .25rem; }
-    .subtitle { color: #94a3b8; font-size: .85rem; margin-bottom: 1.5rem; }
+    .voice-wrap { max-width: 640px; margin: 0 auto; padding: 4rem 3.5rem; }
+    .card { width: 100%; }
+    .card h1 { font-size: 1.5rem; font-weight: 500; margin-bottom: .25rem; }
+    .subtitle { color: var(--text-light); font-size: 1rem; margin-bottom: .5rem; }
+    .bio { margin-bottom: 2rem; }
+    .bio p { margin-bottom: 1rem; }
+    .bio p:last-child { margin-bottom: 0; }
+    .btn-row { display: flex; gap: .75rem; margin-bottom: 1.5rem; }
     .btn {
-      display: inline-block; padding: .75rem 1.5rem; border: none; border-radius: 8px;
-      font-size: 1rem; font-weight: 600; cursor: pointer; transition: .15s;
-      width: 100%; margin-bottom: .5rem;
+      display: inline-block; padding: .6rem 1.5rem; border: 1px solid var(--border);
+      border-radius: 4px; font-family: "Source Serif 4", Georgia, serif;
+      font-size: .9rem; font-weight: 500; cursor: pointer; transition: .15s;
+      flex: 1; text-align: center;
     }
-    .btn:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-start { background: #22c55e; color: #fff; }
-    .btn-start:hover:not(:disabled) { background: #16a34a; }
-    .btn-end { background: #ef4444; color: #fff; }
-    .btn-end:hover:not(:disabled) { background: #dc2626; }
+    .btn:disabled { opacity: .35; cursor: not-allowed; }
+    .btn-start { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-start:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .btn-end { background: var(--bg); color: var(--red); border-color: var(--border); }
+    .btn-end:hover:not(:disabled) { background: var(--surface); border-color: var(--red); }
     #status {
-      margin-top: 1rem; padding: .75rem; border-radius: 8px;
-      background: #0f172a; font-size: .85rem; min-height: 2.5rem;
-      line-height: 1.5;
+      padding: .75rem 1rem; border-radius: 4px;
+      background: var(--surface); font-size: .9rem;
+      min-height: 2.5rem; line-height: 1.6; border: 1px solid var(--border);
     }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-           margin-right: 6px; vertical-align: middle; }
-    .dot-idle { background: #64748b; }
-    .dot-connecting { background: #f59e0b; animation: pulse 1s infinite; }
-    .dot-connected { background: #22c55e; }
-    .dot-error { background: #ef4444; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
-    .viz-row { display: flex; gap: 1rem; margin-top: 1rem; }
-    .viz-box { flex: 1; background: #0f172a; border-radius: 8px; padding: .5rem; text-align: center; }
-    .viz-label { font-size: .7rem; color: #64748b; margin-bottom: .25rem; text-transform: uppercase; letter-spacing: .05em; }
-    .viz-box canvas { width: 100%; height: 48px; display: block; border-radius: 4px; }
+           margin-right: 8px; vertical-align: middle; }
+    .dot-idle { background: var(--text-light); }
+    .dot-connecting { background: var(--yellow); animation: pulse 1s infinite; }
+    .dot-connected { background: var(--green); }
+    .dot-error { background: var(--red); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    .viz-row { display: flex; gap: 1rem; margin-top: 1.5rem; }
+    .viz-box {
+      flex: 1; background: var(--surface); border-radius: 4px;
+      padding: .75rem; text-align: center; border: 1px solid var(--border);
+    }
+    .viz-label {
+      font-size: .7rem; color: var(--text-light); margin-bottom: .35rem;
+      text-transform: uppercase; letter-spacing: .08em;
+    }
+    .viz-box canvas { width: 100%; height: 48px; display: block; border-radius: 2px; }
     #log {
-      margin-top: 1rem; background: #0f172a; border-radius: 8px;
-      padding: .5rem .75rem; max-height: 180px; overflow-y: auto;
-      font-family: "SF Mono", "Fira Code", monospace; font-size: .7rem;
-      line-height: 1.6; color: #94a3b8;
+      margin-top: 1.5rem; background: var(--surface); border-radius: 4px;
+      padding: .75rem 1rem; max-height: 180px; overflow-y: auto;
+      font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
+      font-size: .7rem; line-height: 1.7; color: var(--text-light);
+      border: 1px solid var(--border);
     }
     #log:empty { display: none; }
-    .log-event { color: #38bdf8; }
-    .log-error { color: #f87171; }
-    .log-info { color: #a3e635; }
+    .log-event { color: #5b7fa4; }
+    .log-error { color: var(--red); }
+    .log-info { color: #4a7a5b; }
+    details { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+    details summary { cursor: pointer; color: var(--text-light); font-size: .85rem; font-weight: 500; }
+    details summary:hover { color: var(--accent); }
+    .log-controls { margin-top: .5rem; display: flex; gap: .75rem; align-items: center; }
+    .log-controls button {
+      background: var(--surface-dark); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: .25rem .75rem; cursor: pointer;
+      font-family: "Source Serif 4", Georgia, serif; font-size: .75rem;
+    }
+    .log-controls button:hover { background: var(--border); }
+    .log-controls label { color: var(--text-light); font-size: .75rem; display: flex; align-items: center; gap: .3rem; }
+    #agentLogs {
+      margin-top: .75rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: .75rem; max-height: 300px; overflow: auto;
+      font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
+      font-size: .65rem; color: var(--text-light); line-height: 1.5;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    .links-section { padding-top: 1.5rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+    .footer-row {
+      display: flex; flex-wrap: wrap; align-items: baseline;
+      justify-content: center; gap: 2rem;
+    }
+    .footer-row > a {
+      font-size: .85rem; font-weight: 500; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--text-light); text-decoration: none;
+    }
+    .footer-row > a:hover { color: var(--accent); text-decoration: none; }
+    .elsewhere {
+      display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    }
+    .elsewhere-label {
+      font-size: .85rem; font-weight: 500; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--text-light);
+    }
+    .elsewhere a { font-size: .7rem; color: var(--text-light); text-decoration: none; }
+    .elsewhere a:hover { color: var(--accent); }
+    .elsewhere a.icon-link {
+      display: inline-flex; align-items: center; margin-left: .5rem;
+    }
+    .elsewhere a.icon-link svg { width: 16px; height: 16px; }
 
     /* ---- Dashboard tab ---- */
-    .dash-wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
-    .dash-wrap h2 { font-size: 1.1rem; margin-bottom: 12px; color: #94a3b8; font-weight: 500; }
-    .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
-    .dcard { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .dash-wrap { padding: 2rem 1.5rem; max-width: 960px; margin: 0 auto; }
+    .dash-wrap h2 { font-size: 1rem; margin-bottom: .75rem; color: var(--text); font-weight: 500; }
+    .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .dcard { background: var(--bg); border-radius: 4px; padding: 1.25rem; border: 1px solid var(--border); }
     .dcard-wide { grid-column: 1 / -1; }
-    .stat { font-size: 2rem; font-weight: 700; color: #f8fafc; }
-    .stat-label { font-size: .85rem; color: #64748b; margin-top: 4px; }
-    .stat-row { display: flex; gap: 24px; margin-top: 12px; }
+    .stat { font-size: 2rem; font-weight: 600; color: var(--text); }
+    .stat-label { font-size: .85rem; color: var(--text-light); margin-top: 4px; }
+    .stat-row { display: flex; gap: 1.5rem; margin-top: .75rem; }
     .stat-item { text-align: center; }
-    .stat-item .value { font-size: 1.2rem; font-weight: 600; color: #cbd5e1; }
-    .stat-item .label { font-size: .75rem; color: #64748b; }
-    .badge { display: inline-block; padding: 4px 12px; border-radius: 6px; font-size: .85rem; font-weight: 600; }
-    .badge-green { background: #166534; color: #86efac; }
-    .badge-red { background: #991b1b; color: #fca5a5; }
-    .badge-yellow { background: #854d0e; color: #fde047; }
+    .stat-item .value { font-size: 1.1rem; font-weight: 500; color: var(--text); }
+    .stat-item .label { font-size: .7rem; color: var(--text-light); text-transform: uppercase; letter-spacing: .05em; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 3px; font-size: .8rem; font-weight: 500; }
+    .badge-green { background: #e6f4ea; color: #1a7a3a; }
+    .badge-red { background: #fde8e8; color: #a12828; }
+    .badge-yellow { background: #fef3d6; color: #8a6d0b; }
     .dash-wrap table { width: 100%; border-collapse: collapse; font-size: .85rem; }
-    .dash-wrap th { text-align: left; padding: 8px; color: #64748b; border-bottom: 1px solid #334155; }
-    .dash-wrap td { padding: 8px; border-bottom: 1px solid #1e293b; }
-    .dash-wrap pre { background: #0f172a; padding: 12px; border-radius: 8px; font-size: .8rem; overflow-x: auto; max-height: 300px; overflow-y: auto; color: #94a3b8; }
-    .dash-wrap canvas { max-height: 200px; }
-    .dash-loading { text-align: center; padding: 3rem; color: #64748b; }
-    .dash-refresh {
-      background: #334155; color: #e2e8f0; border: none; padding: 6px 14px;
-      border-radius: 6px; cursor: pointer; font-size: .8rem; margin-bottom: 16px;
+    .dash-wrap th { text-align: left; padding: 8px; color: var(--text-light); border-bottom: 1px solid var(--border); font-weight: 500; }
+    .dash-wrap td { padding: 8px; border-bottom: 1px solid var(--border); }
+    .dash-wrap pre {
+      background: var(--surface); padding: 1rem; border-radius: 4px; font-size: .75rem;
+      overflow-x: auto; max-height: 300px; overflow-y: auto; color: var(--text-light);
+      border: 1px solid var(--border);
     }
-    .dash-refresh:hover { background: #475569; }
+    .dash-wrap canvas { max-height: 200px; }
+    .dash-loading { text-align: center; padding: 3rem; color: var(--text-light); }
+    .dash-refresh {
+      background: var(--surface-dark); color: var(--text); border: 1px solid var(--border);
+      padding: 6px 14px; border-radius: 4px; cursor: pointer;
+      font-family: "Source Serif 4", Georgia, serif; font-size: .8rem; margin-bottom: 1rem;
+    }
+    .dash-refresh:hover { background: var(--border); }
   </style>
 </head>
 <body>
 
-  <!-- Tab bar -->
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchTab('voice')">Voice Test</button>
-    <button class="tab-btn" onclick="switchTab('dashboard')">Dashboard</button>
+  <div class="voice-wrap">
+    <div class="card">
+      <header class="site-header">
+        <h1><a href="https://dewanggogte.com" target="_blank">Dewang Gogte</a></h1>
+      </header>
+
+      <!-- Tab bar -->
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('voice')">Voice</button>
+        <button class="tab-btn" onclick="switchTab('dashboard')">Dashboard</button>
+      </div>
+    </div>
   </div>
 
-  <!-- Voice Test Tab -->
+  <!-- Voice Tab -->
   <div id="tab-voice" class="tab-content active">
-    <div class="voice-wrap">
+    <div class="voice-wrap" style="padding-top:0">
       <div class="card">
-        <h1>AC Price Agent</h1>
-        <p class="subtitle">Browser voice test — speak Hindi/Hinglish</p>
+        <h1>CallKaro</h1>
+        <p class="subtitle">AC price enquiry agent</p>
 
-        <button class="btn btn-start" id="btnStart" onclick="startConversation()">
-          Start Conversation
-        </button>
-        <button class="btn btn-end" id="btnEnd" onclick="endConversation()" disabled>
-          End Conversation
-        </button>
+        <section class="bio">
+          <p>This is a voice AI agent that calls AC shops to ask about prices, availability, and installation details — in Hindi. It uses LiveKit for real-time audio, Sarvam AI for Hindi speech recognition and synthesis, and Claude as the conversational brain.</p>
+          <p>To test it, click <strong>Start Conversation</strong> and pretend you're a shopkeeper. The agent will greet you, ask about AC prices, enquire about warranty and installation, and then end the call. Speak in Hindi or Hinglish.</p>
+        </section>
+
+        <div class="btn-row">
+          <button class="btn btn-start" id="btnStart" onclick="startConversation()">
+            Start Conversation
+          </button>
+          <button class="btn btn-end" id="btnEnd" onclick="endConversation()" disabled>
+            End Conversation
+          </button>
+        </div>
 
         <div id="status"><span class="dot dot-idle"></span>Ready</div>
 
@@ -181,16 +266,29 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
         <div id="log"></div>
 
-        <details style="margin-top:1rem">
-          <summary style="cursor:pointer; color:#64748b; font-size:.8rem;">Agent Worker Logs (click to load)</summary>
-          <div style="margin-top:.5rem; display:flex; gap:.5rem;">
-            <button onclick="loadAgentLogs()" style="background:#334155; color:#e2e8f0; border:none; border-radius:4px; padding:.3rem .75rem; cursor:pointer; font-size:.7rem;">Refresh</button>
-            <label style="color:#64748b; font-size:.7rem; display:flex; align-items:center; gap:.3rem;">
+        <details>
+          <summary>Agent Worker Logs (click to load)</summary>
+          <div class="log-controls">
+            <button onclick="loadAgentLogs()">Refresh</button>
+            <label>
               <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto-refresh
             </label>
           </div>
-          <pre id="agentLogs" style="margin-top:.5rem; background:#020617; border-radius:8px; padding:.5rem; max-height:300px; overflow:auto; font-size:.65rem; color:#94a3b8; line-height:1.4; white-space:pre-wrap; word-break:break-all;"></pre>
+          <pre id="agentLogs"></pre>
         </details>
+
+        <section class="links-section">
+          <div class="footer-row">
+            <a href="https://dewanggogte.com" target="_blank">Home</a>
+            <a href="https://dewanggogte.com/blog" target="_blank">Blog</a>
+            <span class="elsewhere">
+              <span class="elsewhere-label">Elsewhere:</span>
+              <a href="mailto:dewanggogte@gmail.com" class="icon-link" aria-label="Email"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></a>
+              <a href="https://linkedin.com/in/dewanggogte" target="_blank" class="icon-link" aria-label="LinkedIn"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>
+              <a href="https://instagram.com/dewangraphy" target="_blank" class="icon-link" aria-label="Instagram"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></a>
+            </span>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -227,7 +325,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         dashLoaded = true;
         renderDashboard(d, el);
       } catch(e) {
-        el.innerHTML = '<div class="dash-loading" style="color:#f87171">Failed to load: ' + e.message + '</div>';
+        el.innerHTML = '<div class="dash-loading" style="color:var(--red)">Failed to load: ' + e.message + '</div>';
       }
     }
 
@@ -237,7 +335,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       const transcripts = d.transcripts;
       const tRows = transcripts.slice(-10).map(tr =>
         `<tr><td>${tr._filename}</td><td>${tr.store_name}</td><td>${tr._total_messages}</td><td>${tr._duration_seconds}s</td><td>${tr.phone}</td></tr>`
-      ).join('') || '<tr><td colspan="5" style="color:#64748b">No transcripts</td></tr>';
+      ).join('') || '<tr><td colspan="5" style="color:var(--text-light)">No transcripts</td></tr>';
 
       const testOut = (t.output || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -258,7 +356,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
           <div class="dcard">
             <h2>Errors</h2>
-            <div class="stat" style="color:${m.total_errors > 0 ? '#ef4444' : '#22c55e'}">${m.total_errors}</div>
+            <div class="stat" style="color:${m.total_errors > 0 ? 'var(--red)' : 'var(--green)'}">${m.total_errors}</div>
             <div class="stat-label">Across all log files</div>
           </div>
         </div>
@@ -338,8 +436,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
         if (ttftChartInst) ttftChartInst.destroy();
         ttftChartInst = new Chart(document.getElementById('dashTtft'), {
           type: 'bar',
-          data: { labels: ttftData.map((_,i) => 'T'+(i+1)), datasets: [{ label: 'TTFT (s)', data: ttftData, backgroundColor: '#3b82f6', borderRadius: 4 }] },
-          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#64748b' } }, x: { grid: { display: false }, ticks: { color: '#64748b', maxRotation: 0, autoSkip: true, maxTicksLimit: 20 } } } }
+          data: { labels: ttftData.map((_,i) => 'T'+(i+1)), datasets: [{ label: 'TTFT (s)', data: ttftData, backgroundColor: '#b85a3b', borderRadius: 4 }] },
+          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: '#e8e6e3' }, ticks: { color: '#666' } }, x: { grid: { display: false }, ticks: { color: '#666', maxRotation: 0, autoSkip: true, maxTicksLimit: 20 } } } }
         });
       }
       const pt = m.all_prompt_tokens || [], ct = m.all_completion_tokens || [];
@@ -348,10 +446,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
         tokenChartInst = new Chart(document.getElementById('dashTokens'), {
           type: 'bar',
           data: { labels: pt.map((_,i) => 'T'+(i+1)), datasets: [
-            { label: 'Prompt', data: pt, backgroundColor: '#6366f1', borderRadius: 4 },
-            { label: 'Completion', data: ct, backgroundColor: '#22c55e', borderRadius: 4 }
+            { label: 'Prompt', data: pt, backgroundColor: '#b85a3b', borderRadius: 4 },
+            { label: 'Completion', data: ct, backgroundColor: '#4a9', borderRadius: 4 }
           ]},
-          options: { responsive: true, plugins: { legend: { labels: { color: '#94a3b8' } } }, scales: { y: { stacked: true, beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#64748b' } }, x: { stacked: true, grid: { display: false }, ticks: { color: '#64748b', maxRotation: 0, autoSkip: true, maxTicksLimit: 20 } } } }
+          options: { responsive: true, plugins: { legend: { labels: { color: '#666' } } }, scales: { y: { stacked: true, beginAtZero: true, grid: { color: '#e8e6e3' }, ticks: { color: '#666' } }, x: { stacked: true, grid: { display: false }, ticks: { color: '#666', maxRotation: 0, autoSkip: true, maxTicksLimit: 20 } } } }
         });
       }
     }
@@ -371,7 +469,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     function log(msg, cls = 'log-event') {
       const el = document.getElementById('log');
       const ts = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      el.innerHTML += `<div class="${cls}"><span style="color:#475569">${ts}</span> ${msg}</div>`;
+      el.innerHTML += `<div class="${cls}"><span style="color:var(--text-light)">${ts}</span> ${msg}</div>`;
       el.scrollTop = el.scrollHeight;
     }
 
@@ -393,14 +491,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
       const bars = 32, step = Math.floor(buf.length / bars), barW = W / bars - 1;
       for (let i = 0; i < bars; i++) {
         const v = buf[i * step] / 255, h = Math.max(2, v * H);
-        ctx.fillStyle = v > 0.05 ? color : '#1e293b';
+        ctx.fillStyle = v > 0.05 ? color : '#e8e6e3';
         ctx.fillRect(i * (barW + 1), H - h, barW, h);
       }
     }
 
     function vizLoop() {
-      drawBars(document.getElementById('micViz'), micAnalyser, '#22c55e');
-      drawBars(document.getElementById('agentViz'), agentAnalyser, '#38bdf8');
+      drawBars(document.getElementById('micViz'), micAnalyser, '#4a9');
+      drawBars(document.getElementById('agentViz'), agentAnalyser, '#b85a3b');
       vizRAF = requestAnimationFrame(vizLoop);
     }
 
@@ -479,12 +577,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
         const resp = await fetch('/api/logs?n=150');
         const data = await resp.json();
         el.innerHTML = data.lines.map(l => {
-          let cls = 'color:#64748b';
-          if (/ERROR|error|ERRO/i.test(l)) cls = 'color:#f87171';
-          else if (/WARN/i.test(l)) cls = 'color:#fbbf24';
-          else if (/INFO/i.test(l)) cls = 'color:#94a3b8';
-          else if (/user_transcript|transcript/i.test(l)) cls = 'color:#a3e635';
-          else if (/TTS|tts|bulbul/i.test(l)) cls = 'color:#38bdf8';
+          let cls = 'color:var(--text-light)';
+          if (/ERROR|error|ERRO/i.test(l)) cls = 'color:#c0392b';
+          else if (/WARN/i.test(l)) cls = 'color:#b8860b';
+          else if (/INFO/i.test(l)) cls = 'color:#666';
+          else if (/user_transcript|transcript/i.test(l)) cls = 'color:#4a7a5b';
+          else if (/TTS|tts|bulbul/i.test(l)) cls = 'color:#5b7fa4';
           return `<span style="${cls}">${l.replace(/</g,'&lt;')}</span>`;
         }).join('\n');
         el.scrollTop = el.scrollHeight;
@@ -733,7 +831,7 @@ def _cleanup_agent():
 # Main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    print(f"\n  AC Price Agent — Browser Test")
+    print(f"\n  CallKaro — AC Price Agent")
     print(f"  {'=' * 40}")
 
     # Auto-manage agent worker
