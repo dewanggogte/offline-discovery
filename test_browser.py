@@ -676,10 +676,14 @@ _agent_proc = None
 def _kill_old_agents():
     """Kill any existing agent_worker.py processes."""
     import subprocess
-    result = subprocess.run(
-        ["pgrep", "-f", "agent_worker.py"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "agent_worker.py"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        # pgrep not available (e.g. slim Docker images) — skip cleanup
+        return
     pids = result.stdout.strip().split("\n")
     my_pid = str(os.getpid())
     for pid in pids:
