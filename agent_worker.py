@@ -2,7 +2,7 @@
 agent_worker.py — LiveKit Agent Worker
 =======================================
 Voice AI agent that calls local AC shops to enquire about prices.
-Uses Sarvam AI for Hindi STT/TTS and Claude Haiku 3.5 or Qwen3 for LLM.
+Uses Sarvam AI for Hindi STT/TTS and Claude Haiku 4.5 or Qwen3 for LLM.
 Includes SanitizedAgent for chat context sanitization, think-tag stripping,
 and English→Hindi phonetic normalization for TTS.
 
@@ -37,8 +37,12 @@ from livekit.agents import (
 )
 from livekit.agents.voice.room_io import RoomOptions
 from livekit.plugins import anthropic, openai, silero, sarvam
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("ac-price-caller.agent")
+
+# Default Claude model — configurable via CLAUDE_MODEL env var
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 
 # ---------------------------------------------------------------------------
@@ -85,14 +89,28 @@ class SanitizedAgent(Agent):
         logger.info("Agent triggered end_call")
         job_ctx = get_job_context()
         # Wait for TTS to finish speaking the goodbye before killing the room
-        await asyncio.sleep(5)
+        await context.wait_for_playout()
+        # Save transcript before shutdown (backup in case disconnect handler doesn't fire)
+        if hasattr(self, '_save_transcript_fn'):
+            self._save_transcript_fn()
         context.session.shutdown()
         await job_ctx.delete_room()
         return "Call ended. Thank you."
 
     async def llm_node(self, chat_ctx, tools, model_settings):
+        # Reset text accumulator for this LLM turn
+        self._last_response_text = ""
+
         # --- Sanitize chat context ---
         chat_ctx = self._sanitize_chat_ctx(chat_ctx)
+
+        # --- Annotate interrupted (truncated) assistant messages ---
+        for item in chat_ctx.items:
+            if (getattr(item, "role", None) == "assistant"
+                    and getattr(item, "interrupted", False)):
+                text = (item.text_content or "").strip()
+                if text and not text.endswith("[interrupted]"):
+                    item.content = [text + " [interrupted]"]
 
         # --- Log what we're sending to the LLM ---
         try:
@@ -109,15 +127,18 @@ class SanitizedAgent(Agent):
 
         # --- Forward to default LLM node, cleaning output for TTS ---
         # Per-chunk normalization to keep streaming smooth (no buffering).
+        # Also accumulate text so end_call can capture it for transcript.
         async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
             if isinstance(chunk, str):
                 chunk = _strip_think_tags(chunk)
                 chunk = _normalize_for_tts(chunk)
                 if chunk.strip():  # skip empty chunks but preserve leading/trailing spaces
+                    self._last_response_text += chunk
                     yield chunk
             elif hasattr(chunk, "delta") and isinstance(getattr(chunk.delta, "content", None), str):
                 chunk.delta.content = _strip_think_tags(chunk.delta.content)
                 chunk.delta.content = _normalize_for_tts(chunk.delta.content)
+                self._last_response_text += chunk.delta.content
                 yield chunk
             else:
                 yield chunk
@@ -169,6 +190,77 @@ def _strip_think_tags(text: str) -> str:
 
 _ACTION_RE = re.compile(r"[\*\(\[][a-zA-Z\s]+[\*\)\]]")
 
+# ---------------------------------------------------------------------------
+# Devanagari → Romanized Hindi transliteration (safety net for LLM leaks)
+# ---------------------------------------------------------------------------
+# Static lookup — O(n) per character, zero latency overhead.
+# Covers all common Devanagari vowels, consonants, matras, and digits.
+_DEVANAGARI_MAP = {
+    # Vowels (independent forms)
+    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo',
+    'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an',
+    'अः': 'ah',
+    # Consonants
+    'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+    'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+    'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+    'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+    'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+    'य': 'ya', 'र': 'ra', 'ल': 'la', 'व': 'va', 'श': 'sha',
+    'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+    # Nukta variants
+    'क़': 'qa', 'ख़': 'kha', 'ग़': 'ga', 'ज़': 'za', 'ड़': 'da', 'ढ़': 'dha', 'फ़': 'fa',
+    # Matras (vowel signs on consonants)
+    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
+    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au',
+    'ं': 'n', 'ः': 'h', 'ँ': 'n',
+    # Halant (virama) — suppresses inherent 'a' vowel
+    '्': '',
+    # Digits
+    '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
+    '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
+    # Punctuation
+    '।': '.', '॥': '.',
+}
+
+# Devanagari consonants have an inherent 'a' vowel. When followed by a matra
+# (dependent vowel sign), the matra replaces the inherent 'a'. When followed by
+# halant (्), the inherent 'a' is suppressed entirely.
+_DEVANAGARI_CONSONANTS = set(
+    'कखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह'
+    'क़ख़ग़ज़ड़ढ़फ़'
+)
+# Matras (dependent vowel signs) — replace the inherent 'a' of the preceding consonant
+_DEVANAGARI_MATRAS = {
+    'ा', 'ि', 'ी', 'ु', 'ू', 'ृ', 'े', 'ै', 'ो', 'ौ',
+}
+
+def _transliterate_devanagari(text: str) -> str:
+    """Replace any Devanagari characters with Romanized equivalents.
+    Fast single-pass — only activates if Devanagari is detected.
+    Handles consonant+matra combinations correctly (matra replaces inherent 'a')."""
+    # Quick check: skip if no Devanagari present (common case)
+    if not any('\u0900' <= c <= '\u097F' for c in text):
+        return text
+    result = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if '\u0900' <= ch <= '\u097F':
+            roman = _DEVANAGARI_MAP.get(ch, '')
+            # If this is a consonant, check if next char is a matra or halant
+            if ch in _DEVANAGARI_CONSONANTS and roman.endswith('a'):
+                if i + 1 < len(text):
+                    next_ch = text[i + 1]
+                    if next_ch in _DEVANAGARI_MATRAS or next_ch == '्':
+                        # Strip inherent 'a' — the matra/halant will provide the vowel
+                        roman = roman[:-1]
+            result.append(roman)
+        else:
+            result.append(ch)
+        i += 1
+    return ''.join(result)
+
 # Hindi number words
 _HINDI_ONES = {
     0: "", 1: "ek", 2: "do", 3: "teen", 4: "chaar", 5: "paanch",
@@ -209,8 +301,20 @@ def _number_to_hindi(n: int) -> str:
         parts.append(_number_to_hindi(n // 100000) + " lakh")
         n %= 100000
     if n >= 1000:  # hazaar
-        parts.append(_number_to_hindi(n // 1000) + " hazaar")
-        n %= 1000
+        thousands = n // 1000
+        remainder = n % 1000
+        if remainder == 500:
+            # Natural Hindi: 37500 → "saadhe saintees hazaar" (not "saintees hazaar paanch sau")
+            if thousands == 1:
+                parts.append("dedh hazaar")
+            elif thousands == 2:
+                parts.append("dhaai hazaar")
+            else:
+                parts.append("saadhe " + _number_to_hindi(thousands) + " hazaar")
+            n = 0  # fully consumed
+        else:
+            parts.append(_number_to_hindi(thousands) + " hazaar")
+            n = remainder
     if n >= 100:  # sau
         parts.append(_HINDI_ONES[n // 100] + " sau")
         n %= 100
@@ -249,6 +353,10 @@ def _normalize_for_tts(text: str) -> str:
     """Clean up LLM output for TTS — strip markers, fix spacing, convert numbers."""
     # Strip roleplay action markers
     text = _ACTION_RE.sub("", text)
+    # Replace newlines with spaces (LLM sometimes inserts \n\n between sentences)
+    text = text.replace("\n", " ")
+    # Transliterate any Devanagari that leaked through the LLM (safety net)
+    text = _transliterate_devanagari(text)
     # Convert digit numbers to Hindi words
     text = _replace_numbers(text)
     # Insert space between lowercase→uppercase transitions (fixes "puraneAC" → "purane AC")
@@ -286,17 +394,33 @@ If the shopkeeper mentions these, just say "achha" and move on.
 
 CONVERSATION FLOW:
 - Start by confirming the shop and asking about the AC
-- Ask the price, then negotiate naturally
-- Once you have price + 1-2 extras, wrap up and CALL the end_call tool
-- Don't go through a checklist — follow the shopkeeper's responses naturally
+- Ask ONE question at a time. Do not stack 2-3 questions in one response.
+- Cover these topics naturally: price → warranty → installation → delivery
+- After getting the price and at least 2 other details, wrap up and CALL the end_call tool
+- Follow the shopkeeper's responses naturally — don't go through a checklist
+
+INTERRUPTIONS:
+- If your previous message shows [interrupted], it means the shopkeeper interrupted you mid-sentence.
+- Do NOT repeat what you already said. Respond to what the shopkeeper said instead.
+- Continue the conversation naturally from the interruption point.
 
 ENDING THE CALL:
-- ONLY call end_call AFTER you have asked about the price. Do NOT end the call early.
+- Do NOT call end_call until you have the PRICE plus at least 2 of: warranty, installation cost, delivery time.
 - If the shopkeeper says something unclear or off-topic, stay on the line and redirect to AC prices.
 - If the shopkeeper says "wait" or "hold on", just say "ji ji, no problem" and wait.
-- When done, say goodbye and IMMEDIATELY call the end_call tool function
-- Do NOT continue talking after saying goodbye
-- If the shopkeeper asks "anything else?" after you've said bye, say "nahi ji, bas itna hi tha" and call end_call
+- When you have enough info, say a SHORT goodbye like "Theek hai ji, bahut badiya. Dhanyavaad, namaste." and IMMEDIATELY call end_call.
+- Do NOT continue talking after saying goodbye.
+- If the shopkeeper asks "anything else?" after you've said bye, say "nahi ji, bas itna hi tha" and call end_call.
+
+STAY IN CHARACTER:
+- You are the CUSTOMER calling to ask for prices. The shopkeeper is the one answering.
+- NEVER confirm stock availability or offer to show models — that is the SHOPKEEPER's job, not yours.
+- The shopkeeper may respond in English, Hindi, or Hinglish. Regardless of their language, YOU always speak in Romanized Hindi and stay in the customer role.
+- If the shopkeeper's English response sounds like a question (e.g. "Do you have it in stock?"), they are probably confirming they have it. Respond as a customer: ask for the price.
+- You are a regular customer. Sound like a real person with concrete details — don't be evasive.
+- If asked where you live, use the area from YOUR AREA (given below). Say it naturally: "[area] mein rehta hoon" or "[area] side se bol raha hoon".
+- If asked about your old AC for exchange, say "Voltas ka hai, kaafi purana ho gaya hai" or "LG ka window AC hai purana". Pick ONE brand and stick with it.
+- Do NOT invent overly specific details (exact addresses, flat numbers, family members). Keep it natural but concrete enough to build trust.
 
 CRITICAL OUTPUT RULES:
 - Your output goes DIRECTLY to a Hindi text-to-speech engine
@@ -304,17 +428,30 @@ CRITICAL OUTPUT RULES:
 - NEVER use Devanagari script. No Hindi letters like हिंदी, आप, कैसे etc.
 - NEVER add English translations, explanations, or parenthetical notes. NO "(Yes, I'm listening)" or similar.
 - NEVER use newlines in your response. Write everything in a single line.
+- Ask only ONE question per response. Do NOT stack 2-3 questions together.
+  WRONG: "38000? Thoda zyada nahi? Installation free hai kya?" (3 questions)
+  RIGHT: "Achha, 38000. Thoda zyada lag raha hai. Installation free hai kya?" (1 question)
+- When the shopkeeper tells you a price, echo it as a STATEMENT, not a question. Say "Achha, 38000." NOT "38000?"
 - Put a space between EVERY word: "aap ka rate kya hai" NOT "aapkaratekya hai"
-- Write numbers as Hindi words, NOT digits. Say "chhatees hazaar" not "36000" or "36 hazaar". Say "dedh ton" not "1.5 ton".
-- When the shopkeeper tells you a price, REPEAT their exact number back to confirm. Do NOT substitute a different number.
+- Write ALL numbers as DIGITS, not words. The system converts digits to Hindi words automatically.
+  Say "38000" not "adtees hazaar". Say "1.5 ton" not "dedh ton". Say "2 saal" not "do saal".
+- When the shopkeeper tells you ANY number (price, warranty years, delivery days), REPEAT their EXACT number back as digits. Do NOT change the number.
+  WRONG: Shopkeeper says "39000" → you say "Achha, 30000" (WRONG number)
+  RIGHT: Shopkeeper says "39000" → you say "Achha, 39000." (exact same number)
+  WRONG: Shopkeeper says "2 years warranty" → you say "1 saal" (WRONG number)
+  RIGHT: Shopkeeper says "2 years warranty" → you say "Achha, 2 saal."
 - Do NOT write action markers like *pauses* or (laughs)
 - Do NOT write "[end_call]" as text. Use the actual end_call tool function when you want to end the call.
 - Only output the exact words you would speak. Nothing else.
 
 EXAMPLES:
-You: "Bhai sahab, Samsung dedh ton ka paanch star inverter split AC hai aapke paas?"
-You: "Achha, uska kya rate chal raha hai?"
-You: "Hmm, thoda zyada lag raha hai. Online pe toh kam mein dikha raha tha."
+You: "Bhai sahab, Samsung 1.5 ton ka 5 star inverter split AC hai aapke paas?"
+Shopkeeper: "Haan, 38000 ka hai."
+You: "Achha, 38000. Installation free hai kya?"
+Shopkeeper: "Haan free hai."
+You: "Theek hai. Warranty kitni milegi?"
+Shopkeeper: "1 saal ki."
+You: "Achha 1 saal. Delivery kitne din mein hogi?"
 You: "Theek hai ji, main soch ke bataata hoon. Dhanyavaad." → then call end_call tool
 """
 
@@ -332,9 +469,9 @@ def _create_llm():
     provider = os.environ.get("LLM_PROVIDER", "qwen").lower()
 
     if provider == "claude":
-        logger.info("[LLM] Using Claude Haiku 3.5 (Anthropic)")
+        logger.info(f"[LLM] Using Claude ({CLAUDE_MODEL})")
         return anthropic.LLM(
-            model="claude-3-5-haiku-20241022",
+            model=CLAUDE_MODEL,
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             temperature=0.7,
         )
@@ -363,6 +500,7 @@ async def entrypoint(ctx: JobContext):
     phone_number = metadata.get("phone", "")
     store_name = metadata.get("store_name", "Unknown Store")
     ac_model = metadata.get("ac_model", "Samsung 1.5 Ton Split AC")
+    nearby_area = metadata.get("nearby_area", "")
     sip_trunk_id = metadata.get("sip_trunk_id", os.environ.get("SIP_OUTBOUND_TRUNK_ID", ""))
 
     is_browser = not phone_number
@@ -374,11 +512,12 @@ async def entrypoint(ctx: JobContext):
     # Connect agent to the room
     await ctx.connect()
 
-    # Build custom instructions with the specific AC model and store name
+    # Build custom instructions with the specific AC model, store name, and nearby area
     greeting = f"Hello, yeh {store_name} hai? Aap log AC dealer ho?"
+    area_info = f'\nYOUR AREA: {nearby_area} — if asked where you live, say "{nearby_area} mein rehta hoon" or "{nearby_area} side".' if nearby_area else ""
     instructions = DEFAULT_INSTRUCTIONS + f"""
 PRODUCT: {ac_model}
-STORE: {store_name}
+STORE: {store_name}{area_info}
 
 NOTE: You have already greeted the shopkeeper with: "{greeting}"
 Do NOT repeat the greeting. Continue the conversation from the shopkeeper's response.
@@ -386,6 +525,9 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
 
     # Create the agent session with Sarvam STT/TTS + switchable LLM (Claude or Qwen)
     session = AgentSession(
+        # Turn detection — multilingual transformer model predicts end-of-utterance
+        # using conversation context (supports Hindi). Runs on top of VAD signals.
+        turn_detection=MultilingualModel(),
         # Voice Activity Detection — detect when someone is speaking
         vad=silero.VAD.load(
             min_speech_duration=0.08,    # 80ms — filter out short noise bursts (default 50ms)
@@ -398,6 +540,7 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
             model="saaras:v3",
             api_key=os.environ.get("SARVAM_API_KEY"),
             sample_rate=16000,
+            flush_signal=True,           # Emit start/end of speech events for turn detection
         ),
         # LLM — switchable via LLM_PROVIDER env var (qwen or claude)
         llm=_create_llm(),
@@ -405,7 +548,7 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
         tts=sarvam.TTS(
             model="bulbul:v3",
             target_language_code="hi-IN",
-            speaker="aditya",  # v3 male voice; others: rahul, rohan, amit, dev, varun, ratan; female: ritu, priya, neha, pooja, simran
+            speaker="shubh",  # v3 male voice; others: aditya, rahul, rohan, amit, dev, varun, ratan; female: ritu, priya, neha, pooja, simran
             api_key=os.environ.get("SARVAM_API_KEY"),
             pace=1.0,
             pitch=0,
@@ -413,21 +556,32 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
             speech_sample_rate=16000 if is_browser else 8000,  # 16kHz browser / 8kHz telephony
             enable_preprocessing=True,  # Let Sarvam handle Romanized Hindi → native pronunciation
         ),
+        # Interruption handling
+        min_interruption_duration=0.8,   # 800ms speech before triggering barge-in (default 500ms)
+        min_interruption_words=2,        # Require 2+ words — filters "hmm", "haan" backchannels
+        false_interruption_timeout=2.0,  # Wait 2s before declaring false interruption
+        resume_false_interruption=True,  # Resume speaking after false interruption
+        min_endpointing_delay=0.5,       # 500ms after last speech before declaring turn complete
     )
+
+    # ---- Transcript collection & conversation logging ----
+    transcript_lines = []  # Collect messages for saving to file
+
+    # Create agent and wire up transcript reference for end_call capture
+    agent = SanitizedAgent(instructions=instructions)
+    agent._transcript_lines = transcript_lines
+    agent._last_response_text = ""
 
     # Start the agent
     await session.start(
         room=ctx.room,
-        agent=SanitizedAgent(instructions=instructions),
+        agent=agent,
         room_options=RoomOptions(
             # Audio-only — no text or video input
             text_input=False,
             video_input=False,
         ),
     )
-
-    # ---- Transcript collection & conversation logging ----
-    transcript_lines = []  # Collect messages for saving to file
 
     @session.on("user_input_transcribed")
     def on_user_transcript(ev):
@@ -440,8 +594,14 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
         item = ev.item
         if item.role == "assistant":
             text = "".join(str(c) for c in item.content)
-            logger.info(f"[LLM] {text}")
-            transcript_lines.append({"role": "assistant", "text": text, "time": datetime.now().isoformat()})
+            was_interrupted = getattr(item, "interrupted", False)
+            if was_interrupted:
+                logger.warning(f"[INTERRUPTED] Agent speech truncated: '{text}'")
+            logger.info(f"[LLM] {'[TRUNCATED] ' if was_interrupted else ''}{text}")
+            transcript_lines.append({
+                "role": "assistant", "text": text, "time": datetime.now().isoformat(),
+                **({"interrupted": True} if was_interrupted else {}),
+            })
 
     @session.on("function_tools_executed")
     def on_tools_executed(ev):
@@ -461,14 +621,46 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
                 f"TTFT: {m.ttft:.2f}s, duration: {m.duration:.2f}s"
             )
 
+    @session.on("agent_state_changed")
+    def on_agent_state_changed(ev):
+        """Dynamically adjust interruption sensitivity based on agent state."""
+        if ev.new_state == "speaking":
+            # While speaking, require stronger evidence of real interruption
+            session.options.min_interruption_words = 2
+            session.options.min_interruption_duration = 1.0
+        elif ev.new_state == "thinking":
+            # While thinking, be responsive to any speech
+            session.options.min_interruption_words = 0
+            session.options.min_interruption_duration = 0.3
+
     @session.on("error")
     def on_error(ev):
-        logger.error(f"[SESSION ERROR] source={type(ev.source).__name__}, error={ev.error}")
+        error = ev.error
+        source_name = type(ev.source).__name__
+        if hasattr(error, 'recoverable'):
+            if error.recoverable:
+                logger.warning(
+                    f"[SESSION ERROR] (recoverable) source={source_name}, "
+                    f"label={error.label}, error={error.error}"
+                )
+            else:
+                logger.error(
+                    f"[SESSION ERROR] (non-recoverable) source={source_name}, "
+                    f"label={error.label}, error={error.error}"
+                )
+                _save_transcript()
+        else:
+            logger.error(f"[SESSION ERROR] source={source_name}, error={error}")
 
-    # ---- Save transcript when a participant disconnects ----
+    # ---- Transcript & log cleanup (idempotent — safe to call multiple times) ----
+    _transcript_saved = False
+    _log_closed = False
+
     def _save_transcript():
-        if not transcript_lines:
+        nonlocal _transcript_saved
+        if _transcript_saved or not transcript_lines:
             return
+        _transcript_saved = True
         transcript_dir = Path(__file__).parent / "transcripts"
         transcript_dir.mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -488,14 +680,29 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
         except Exception as e:
             logger.error(f"[TRANSCRIPT] Failed to save: {e}")
 
+    def _close_log():
+        nonlocal _log_closed
+        if _log_closed:
+            return
+        _log_closed = True
+        logging.getLogger().removeHandler(call_log_handler)
+        call_log_handler.close()
+        logger.info(f"[LOG] Call log saved to {call_log_path}")
+
+    # Wire save function onto agent so end_call can use it
+    agent._save_transcript_fn = _save_transcript
+
+    @session.on("close")
+    def on_close(ev):
+        logger.info(f"[SESSION CLOSE] reason={ev.reason}")
+        _save_transcript()
+        _close_log()
+
     @ctx.room.on("participant_disconnected")
     def on_participant_left(participant):
         logger.info(f"Participant {participant.identity} left — saving transcript and closing call log")
         _save_transcript()
-        # Close per-call log handler so the file is flushed and released
-        logging.getLogger().removeHandler(call_log_handler)
-        call_log_handler.close()
-        logger.info(f"[LOG] Call log saved to {call_log_path}")
+        _close_log()
 
     # Now dial the store (or wait for browser participant)
     if phone_number and sip_trunk_id:
@@ -520,7 +727,11 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
         # sanitizer stripping it as an assistant-first message). The LLM knows
         # the greeting was said via the NOTE in system instructions.
         logger.info("Browser session — waiting for browser participant to join")
-        await ctx.wait_for_participant()
+        try:
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("Browser participant did not join within 30 seconds — shutting down")
+            return
         logger.info("Browser participant joined — sending greeting")
         session.say(greeting, add_to_chat_ctx=False)
         transcript_lines.append({"role": "assistant", "text": greeting, "time": datetime.now().isoformat()})
@@ -529,7 +740,8 @@ Do NOT repeat the greeting. Continue the conversation from the shopkeeper's resp
         # Set a maximum call duration timer (SIP calls only)
         async def call_timeout():
             await asyncio.sleep(120)  # 2 minutes max
-            logger.info("Call timeout reached, ending call")
+            logger.info("Call timeout reached, saving transcript and ending call")
+            _save_transcript()
             for participant in ctx.room.remote_participants.values():
                 try:
                     await ctx.api.room.remove_participant(

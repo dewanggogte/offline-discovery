@@ -3,60 +3,70 @@
     "name": "Pai International - Jayanagar",
     "phone": "+918042464343",
     "area": "Jayanagar 2nd Block",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "JP Nagar 5th Phase"
   },
   {
     "name": "Pai International - Malleshwaram",
     "phone": "+919108444777",
     "area": "Malleshwaram",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Rajajinagar"
   },
   {
     "name": "Girias - Koramangala",
     "phone": "+918041571296",
     "area": "Koramangala",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "BTM Layout 2nd Stage"
   },
   {
     "name": "Girias - Brigade Road",
     "phone": "+919035499066",
     "area": "Brigade Road",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Shivajinagar"
   },
   {
     "name": "Viveks - Jayanagar",
     "phone": "+918041461902",
     "area": "Jayanagar 3rd Block",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Banashankari 3rd Stage"
   },
   {
     "name": "Viveks - Indiranagar",
     "phone": "+918041461910",
     "area": "Indiranagar",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Domlur"
   },
   {
     "name": "Croma - Koramangala",
     "phone": "+917795838018",
     "area": "Koramangala",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Ejipura"
   },
   {
     "name": "Croma - Electronic City",
     "phone": "+918867854558",
     "area": "Electronic City",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Neeladri Nagar"
   },
   {
     "name": "Reliance Digital - HSR Layout",
     "phone": "+918071890032",
     "area": "HSR Layout",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Bommanahalli"
   },
   {
     "name": "Reliance Digital - Whitefield",
     "phone": "+918692007583",
     "area": "Whitefield",
-    "city": "Bangalore"
+    "city": "Bangalore",
+    "nearby_area": "Mahadevapura"
   }
 ]

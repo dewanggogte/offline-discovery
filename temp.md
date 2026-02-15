@@ -1,31 +1,37 @@
-# Issues to Fix (from Browser_Test_20260211_203622)
+# Issues to Fix
 
-## 1. Greeting spoken twice / sanitizer stripping context
-The greeting is added to chat context as an assistant message, but `_sanitize_chat_ctx` requires the first non-system message to be `user`. So it removes the greeting every turn. The LLM then regenerates its own greeting — user hears it twice.
+## Resolved
 
-**Fix:** Update `_sanitize_chat_ctx` to not strip the greeting, OR inject the greeting as a system message, OR use `generate_reply()` instead of `say()`.
+### ~~1. Greeting spoken twice / sanitizer stripping context~~
+Fixed: Greeting sent with `add_to_chat_ctx=False`. LLM knows about it via NOTE in system instructions. Sanitizer no longer strips it.
 
-## 2. Store name wrong in LLM-generated greeting
-Because the original greeting gets stripped, the LLM generates its own using "Sharma Electronics" from the EXAMPLES section instead of "Browser Test" from STORE metadata.
+### ~~2. Store name wrong in LLM-generated greeting~~
+Fixed: "Sharma Electronics" removed from EXAMPLES section. Greeting text dynamically uses actual store name.
 
-**Fix:** Tied to #1. Also remove hardcoded "Sharma Electronics" from EXAMPLES — use a generic placeholder or dynamically insert the actual store name.
+### ~~3. Incomplete/cut-off responses in transcript~~
+Fixed: Interrupted messages now marked with `[interrupted]` flag in transcript JSON. Agent annotates truncated context with `[interrupted]` suffix for LLM awareness.
 
-## 3. Incomplete/cut-off responses in transcript
-Example: `"Hmm, theek hai. Warranty kitni milegi? Aur final mein total kitne"` — truncated mid-word when user interrupts (VAD detects speech). Partial response gets saved.
+### ~~4. Math error / wrong Hindi number words~~
+Fixed: LLM no longer writes Hindi number words. Prompt instructs LLM to write ALL numbers as digits (e.g. `39000`, `1.5 ton`, `2 saal`). The `_replace_numbers()` pipeline deterministically converts digits to correct Hindi words. Added "saadhe" pattern for half-thousands (37500 → "saadhe saintees hazaar").
 
-**Fix:** Either don't save truncated responses, or mark them as interrupted in the transcript.
+### ~~5. `\n\n` in responses causing unnatural pauses~~
+Fixed: `_normalize_for_tts()` now replaces all `\n` characters with spaces.
 
-## 4. Math error in negotiation
-Agent says: `"bayaalees hazaar plus dedh hazaar, matlab bayaalees ke paanch hazaar upar"` — 42k + 1.5k ≠ "5 hazaar upar". LLM hallucinates arithmetic.
+### ~~6. Hardcoded "Sharma Electronics" in prompt examples~~
+Fixed: Examples section uses generic multi-turn format without specific store names.
 
-**Fix:** Prompt instruction to avoid doing math on the call. Just repeat what the shopkeeper says and ask for the final number.
+### ~~7. Devanagari characters leaking through~~
+Fixed: `_transliterate_devanagari()` safety net converts any leaked Devanagari to Romanized Hindi via static lookup table. Handles consonant+matra combinations correctly (e.g. `usका` → `uskaa`).
 
-## 5. `\n\n` in responses causing unnatural pauses
-Two responses contain double newlines: `"...Theek hai ji. \n\nExchange pe..."`. Indicates multi-paragraph responses instead of the short 1-2 lines requested. TTS may interpret these as long pauses.
+### ~~8. Duplicate goodbye in transcript~~
+Fixed: Removed transcript append from `end_call` — `conversation_item_added` handler reliably captures it. Previous dedup check failed due to race condition.
 
-**Fix:** Strip `\n` characters in `_normalize_for_tts`. Also reinforce "one line only" in the prompt.
+### ~~9. Agent says "paas mein hi rehta hoon" when asked where they live~~
+Fixed: `stores.json` now has `nearby_area` field per store. Prompt says to use the specific area name. Agent says "Koramangala mein rehta hoon" instead of being evasive.
 
-## 6. Hardcoded "Sharma Electronics" in prompt examples
-The EXAMPLES section uses "Sharma Electronics" which bleeds into LLM behavior when context is lost (see #1).
+### ~~10. Agent confused customer/shopkeeper roles with English-speaking shopkeeper~~
+Fixed: Prompt now explicitly says "You are the CUSTOMER... NEVER confirm stock availability" and handles shopkeeper speaking English.
 
-**Fix:** Replace with a placeholder like `{store_name}` and dynamically substitute, or use a generic "yeh aapki dukaan hai?".
+## Open
+
+(No open issues currently.)

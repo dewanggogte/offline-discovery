@@ -1,7 +1,7 @@
-"""Tests for TTS text normalization — _normalize_for_tts, _strip_think_tags, _ACTION_RE, number conversion."""
+"""Tests for TTS text normalization — _normalize_for_tts, _strip_think_tags, _ACTION_RE, number conversion, Devanagari transliteration."""
 
 import pytest
-from tests.conftest import _normalize_for_tts, _strip_think_tags, _replace_numbers, _number_to_hindi
+from tests.conftest import _normalize_for_tts, _strip_think_tags, _replace_numbers, _number_to_hindi, _transliterate_devanagari
 
 
 # ===================================================================
@@ -43,6 +43,18 @@ class TestHindiNumberConversion:
         result = _number_to_hindi(50000)
         assert "pachaas" in result
         assert "hazaar" in result
+
+    def test_saadhe_37500(self):
+        assert _number_to_hindi(37500) == "saadhe saintees hazaar"
+
+    def test_saadhe_39500(self):
+        assert _number_to_hindi(39500) == "saadhe untaalees hazaar"
+
+    def test_dedh_hazaar(self):
+        assert _number_to_hindi(1500) == "dedh hazaar"
+
+    def test_dhaai_hazaar(self):
+        assert _number_to_hindi(2500) == "dhaai hazaar"
 
     def test_zero(self):
         assert _number_to_hindi(0) == "zero"
@@ -241,3 +253,48 @@ class TestFullNormalizationPipeline:
     def test_5_star_inverter(self, normalize):
         result = normalize("5 star inverter split AC")
         assert "paanch star" in result
+
+
+# ===================================================================
+# F. Devanagari transliteration safety net
+# ===================================================================
+class TestDevanagariTransliteration:
+    """Tests for _transliterate_devanagari — converts leaked Devanagari to Romanized Hindi."""
+
+    def test_no_devanagari_passthrough(self):
+        text = "Achha bhai sahab rate kya hai"
+        assert _transliterate_devanagari(text) == text
+
+    def test_ka_matra(self):
+        # The actual bug: "usका" → "uskaa"
+        result = _transliterate_devanagari("usका")
+        assert result == "uskaa"
+        assert "का" not in result
+
+    def test_full_devanagari_word(self):
+        result = _transliterate_devanagari("कैसे")
+        assert all(c.isascii() for c in result)
+
+    def test_mixed_script(self):
+        result = _transliterate_devanagari("Toh usका price kya hai?")
+        assert "का" not in result
+        assert "Toh us" in result
+        assert "price kya hai?" in result
+
+    def test_devanagari_digits(self):
+        result = _transliterate_devanagari("₹४०,०००")
+        assert "40,000" in result
+
+    def test_empty_string(self):
+        assert _transliterate_devanagari("") == ""
+
+    def test_halant_suppresses_vowel(self):
+        # क् (ka + halant) → "k" (halant suppresses the inherent 'a')
+        result = _transliterate_devanagari("क्")
+        assert result == "k"
+
+    def test_normalize_pipeline_strips_devanagari(self):
+        """Ensure _normalize_for_tts catches Devanagari via transliteration."""
+        result = _normalize_for_tts("Achha. Toh usका price kya hai?")
+        assert "का" not in result
+        assert all(c.isascii() or c in '₹' for c in result)

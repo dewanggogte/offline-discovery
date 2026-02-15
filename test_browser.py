@@ -654,6 +654,7 @@ async def create_token_and_dispatch():
                 metadata=json.dumps({
                     "store_name": "Browser Test",
                     "ac_model": "Samsung 1.5 Ton 5 Star Inverter Split AC",
+                    "nearby_area": "Koramangala 4th Block",
                 }),
             )
         )

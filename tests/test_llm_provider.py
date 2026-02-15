@@ -4,6 +4,7 @@ import os
 from unittest.mock import patch, MagicMock
 
 from tests.conftest import _create_llm
+from agent_worker import CLAUDE_MODEL
 
 
 class TestCreateLlm:
@@ -29,7 +30,7 @@ class TestCreateLlm:
                 _create_llm()
                 mock_anthropic.assert_called_once()
                 call_kwargs = mock_anthropic.call_args.kwargs
-                assert "haiku" in call_kwargs.get("model", "")
+                assert call_kwargs.get("model") == CLAUDE_MODEL
 
     def test_claude_case_insensitive(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "CLAUDE"}, clear=False):
