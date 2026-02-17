@@ -19,3 +19,12 @@ conv1.md
 .DS_Store
 .vscode/
 .idea/
+.claude/
+deploy/
+tests/
+test_results.json
+architecture.md
+PRD.md
+tests.md
+voice_agents.md
+README.md

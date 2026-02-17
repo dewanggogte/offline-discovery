@@ -1447,7 +1447,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/":
+        if path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        elif path == "/":
             self._serve_html()
         elif path == "/api/token":
             self._serve_token()
