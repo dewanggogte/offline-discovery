@@ -63,6 +63,9 @@ class ResearchOutput:
     topic_keywords: dict[str, list[str]] = field(default_factory=dict)
     important_notes: list[str] = field(default_factory=list)
     competing_products: list[dict] = field(default_factory=list)
+    recommended_products: list[dict] = field(default_factory=list)    # top picks with model, specs, street price
+    negotiation_intelligence: dict = field(default_factory=dict)      # margins, seasonal pricing, tactics
+    insider_knowledge: list[str] = field(default_factory=list)        # known issues, recall info, market tips
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +76,9 @@ class ResearchOutput:
             "topic_keywords": self.topic_keywords,
             "important_notes": self.important_notes,
             "competing_products": self.competing_products,
+            "recommended_products": self.recommended_products,
+            "negotiation_intelligence": self.negotiation_intelligence,
+            "insider_knowledge": self.insider_knowledge,
         }
 
     @classmethod
@@ -90,6 +96,9 @@ class ResearchOutput:
             topic_keywords=d.get("topic_keywords", {}),
             important_notes=d.get("important_notes", []),
             competing_products=d.get("competing_products", []),
+            recommended_products=d.get("recommended_products", []),
+            negotiation_intelligence=d.get("negotiation_intelligence", {}),
+            insider_knowledge=d.get("insider_knowledge", []),
         )
 
 
@@ -105,6 +114,8 @@ class DiscoveredStore:
     city: str = ""
     nearby_area: str = ""
     source: str = "web_search"  # "google_maps" or "web_search"
+    specialist: bool = False     # store specializes in this product category
+    relevance_score: float = 0.0 # product-aware ranking score (0-1)
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +128,8 @@ class DiscoveredStore:
             "city": self.city,
             "nearby_area": self.nearby_area,
             "source": self.source,
+            "specialist": self.specialist,
+            "relevance_score": self.relevance_score,
         }
 
     @classmethod
@@ -131,6 +144,8 @@ class DiscoveredStore:
             city=d.get("city", ""),
             nearby_area=d.get("nearby_area", ""),
             source=d.get("source", "web_search"),
+            specialist=d.get("specialist", False),
+            relevance_score=d.get("relevance_score", 0.0),
         )
 
 

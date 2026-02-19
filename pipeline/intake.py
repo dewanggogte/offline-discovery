@@ -31,6 +31,14 @@ Your job is to extract these details through conversation:
 6. Location (city and area — needed to find nearby stores)
 7. Any other preferences (energy efficient, quiet, specific features)
 
+IMPORTANT: Once you know the product type, ask product-specific clarifying questions:
+- AC: tonnage (1, 1.5, 2 ton?), type (split/window?), star rating preference, inverter or non-inverter
+- Washing machine: front load or top load?, capacity (6/7/8 kg?), fully automatic or semi?
+- Fridge: single or double door?, approximate capacity in litres, frost-free preference
+- Laptop: use case (office/gaming/coding?), screen size preference, any brand loyalty
+- TV: screen size (32"/43"/55"?), smart TV needed?, OLED or LED
+- For any product: ask about the 1-2 most important specs that affect price
+
 Guidelines:
 - Ask ONE question at a time. Don't overwhelm the user.
 - Be conversational, not like a form. Use the user's language style.
@@ -38,6 +46,13 @@ Guidelines:
 - Location is important — always ask if not provided.
 - Budget is helpful but optional — don't push if user is unsure.
 - After 2-4 exchanges, when you have enough info, output the requirements.
+- Include <suggestions> tags with 2-4 quick-reply options for the user when asking a question. These appear as clickable chips in the UI.
+
+Format for suggestions (include after your question):
+<suggestions>Option A|Option B|Option C</suggestions>
+
+Example: "What type of AC are you looking for?"
+<suggestions>1.5 ton split AC|1 ton window AC|2 ton split AC|Not sure, help me decide</suggestions>
 
 When you have enough information to proceed, include a JSON block in your response wrapped in <requirements> tags:
 
@@ -58,6 +73,7 @@ Include a natural confirmation message along with the requirements block, like:
 """
 
 _REQUIREMENTS_RE = re.compile(r"<requirements>\s*(.*?)\s*</requirements>", re.DOTALL)
+_SUGGESTIONS_RE = re.compile(r"<suggestions>\s*(.*?)\s*</suggestions>", re.DOTALL)
 
 
 class IntakeAgent:
@@ -98,11 +114,20 @@ class IntakeAgent:
             except (json.JSONDecodeError, Exception) as e:
                 logger.warning(f"Failed to parse requirements JSON: {e}")
 
-        # Strip the requirements tags from the displayed response
-        display_text = _REQUIREMENTS_RE.sub("", assistant_text).strip()
+        # Extract suggestion chips (if any)
+        suggestions = []
+        suggestions_match = _SUGGESTIONS_RE.search(assistant_text)
+        if suggestions_match:
+            raw = suggestions_match.group(1).strip()
+            suggestions = [s.strip() for s in raw.split("|") if s.strip()]
+
+        # Strip the requirements and suggestions tags from the displayed response
+        display_text = _REQUIREMENTS_RE.sub("", assistant_text)
+        display_text = _SUGGESTIONS_RE.sub("", display_text).strip()
 
         return {
             "response": display_text,
             "done": self.done,
             "requirements": self.requirements.to_dict() if self.requirements else None,
+            "suggestions": suggestions,
         }

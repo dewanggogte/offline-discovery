@@ -28,6 +28,13 @@ from . import store_discovery
 from . import prompt_builder
 from .analysis import compare_stores
 
+# Voice experiment support (imported at module level for availability)
+try:
+    from experiment import get_active_experiment, record_result, ExperimentResult
+    _HAS_EXPERIMENTS = True
+except ImportError:
+    _HAS_EXPERIMENTS = False
+
 logger = logging.getLogger("pipeline.session")
 
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
@@ -167,9 +174,20 @@ class PipelineSession:
             for s in self.stores[:5]:
                 self.add_event("store_discovery", f"  {s.name} ({s.area}) [{s.source}]")
 
+            # Auto-rank stores and identify recommended indices
+            ranked = store_discovery.rank_stores(self.stores, top_n=4)
+            ranked_names = {s.name for s in ranked}
+            recommended_indices = [
+                i for i, s in enumerate(self.stores) if s.name in ranked_names
+            ]
+            if recommended_indices:
+                self.add_event("store_discovery",
+                    f"Recommended: {', '.join(self.stores[i].name for i in recommended_indices)}")
+
             result = {
                 "research": self.research.to_dict(),
                 "stores": [s.to_dict() for s in self.stores],
+                "recommended_indices": recommended_indices,
             }
             self._research_result = result
             return result
@@ -230,6 +248,21 @@ class PipelineSession:
 
             self.add_event("call", f"Dispatching agent to room '{room_name}'...")
 
+            # Pick voice variant for this call (A/B experiment support)
+            voice_meta = {}
+            variant_label = ""
+            if _HAS_EXPERIMENTS:
+                experiment = get_active_experiment()
+                variant = experiment.pick_variant()
+                voice_meta = {
+                    "voice_speaker": variant.speaker,
+                    "voice_pace": variant.pace,
+                    "voice_experiment": experiment.name,
+                    "voice_variant": variant.label,
+                }
+                variant_label = variant.label
+                self.add_event("call", f"Voice variant: {variant.label}")
+
             # Dispatch the agent with the dynamic prompt
             lk = LiveKitAPI()
             try:
@@ -245,11 +278,17 @@ class PipelineSession:
                             "greeting": greeting,
                             "pipeline_session": self.session_id,
                             "topic_keywords": self.research.topic_keywords,
+                            **voice_meta,
                         }),
                     )
                 )
             finally:
                 await lk.aclose()
+
+            # Store variant label for experiment tracking
+            if variant_label:
+                self._voice_variants = getattr(self, '_voice_variants', {})
+                self._voice_variants[store_index] = variant_label
 
             self._active_rooms[store_index] = room_name
             self.add_event("call", f"Agent dispatched for '{store.name}' — waiting for connection")

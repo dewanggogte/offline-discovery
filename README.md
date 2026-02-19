@@ -171,4 +171,16 @@ Key design decisions:
 | `LIVEKIT_API_SECRET` | LiveKit API secret |
 | `SIP_OUTBOUND_TRUNK_ID` | LiveKit SIP trunk ID (for phone calls) |
 
+## Deployment
+
+The project is deployed on a homelab Kubernetes cluster via ArgoCD:
+
+```
+push to main → GitHub Actions → Docker build → GHCR → ArgoCD rollout → K8s (homelab)
+```
+
+- **CI/CD**: `.github/workflows/deploy.yaml` builds the Docker image and pushes to `ghcr.io/dewanggogte/callkaro:latest` on every push to `main`
+- **Deployment**: ArgoCD watches the image and triggers a rollout restart on the homelab K8s cluster
+- **Required secrets**: `ARGOCD_TOKEN`, `ARGOCD_APP`, `ARGOCD_SERVER` (configured in GitHub repo settings)
+
 See [architecture.md](architecture.md) for detailed pipeline documentation.

@@ -245,7 +245,7 @@ class TestFullNormalizationPipeline:
         assert normalize("") == ""
 
     def test_clean_romanized_hindi_unchanged(self, normalize):
-        text = "Achha bhai sahab rate kya hai"
+        text = "Achha bhaisaab rate kya hai"
         assert normalize(text) == text
 
     def test_spacing_and_numbers_combined(self, normalize):
@@ -265,7 +265,7 @@ class TestDevanagariTransliteration:
     """Tests for _transliterate_devanagari — converts leaked Devanagari to Romanized Hindi."""
 
     def test_no_devanagari_passthrough(self):
-        text = "Achha bhai sahab rate kya hai"
+        text = "Achha bhaisaab rate kya hai"
         assert _transliterate_devanagari(text) == text
 
     def test_ka_matra(self):

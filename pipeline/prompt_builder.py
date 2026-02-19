@@ -70,12 +70,12 @@ def build_prompt(
 
     # Build the "WHAT YOU CARE ABOUT" section from research questions
     care_about_lines = []
-    for q in research.questions_to_ask[:7]:
+    for q in research.questions_to_ask[:10]:
         care_about_lines.append(f"- {q}")
     care_about = "\n".join(care_about_lines) if care_about_lines else _default_care_about()
 
     # Build topics for conversation flow
-    topics = research.topics_to_cover[:6] if research.topics_to_cover else [
+    topics = research.topics_to_cover[:10] if research.topics_to_cover else [
         "price", "warranty", "installation", "delivery"
     ]
     topic_flow = " → ".join(topics)
@@ -113,6 +113,10 @@ def build_prompt(
     # Build conditional research sections
     research_sections = _build_research_sections(research)
 
+    # Build dynamic conversation flow and negotiation
+    conversation_flow = _build_conversation_flow(requirements, store, casual, topics, min_topics)
+    negotiation = _build_negotiation_section(research)
+
     prompt = f"""You are a regular middle-class Indian guy calling a local {store_type} to ask about {casual}. You speak the way a normal person speaks on the phone in Hindi — casual, natural, with filler words.
 
 VOICE & TONE:
@@ -120,7 +124,7 @@ VOICE & TONE:
 - Use fillers naturally: "haan", "achha", "hmm", "ji"
 - Keep answers SHORT — 1 line, max 2. Don't give speeches.
 - React naturally to what the shopkeeper says.
-- Use "bhai sahab" ONLY ONCE at the beginning. After that just say "ji" or nothing.
+- Use "bhaisaab" ONLY ONCE at the beginning. After that just say "ji" or nothing.
 
 WHAT YOU CARE ABOUT:
 {care_about}
@@ -129,12 +133,9 @@ WHAT YOU DON'T CARE ABOUT (don't ask):
 {dont_care}
 If the shopkeeper mentions these, just say "achha" and move on.
 
-CONVERSATION FLOW:
-- Start by confirming the shop and asking about the {casual}
-- Ask ONE question at a time. Do not stack 2-3 questions in one response.
-- Cover these topics naturally: {topic_flow}
-- After getting the price and at least {min_topics} other details, wrap up and CALL the end_call tool
-- Follow the shopkeeper's responses naturally — don't go through a checklist
+{conversation_flow}
+
+{negotiation}
 {research_sections}
 INTERRUPTIONS:
 - If your previous message shows [interrupted], it means the shopkeeper interrupted you mid-sentence.
@@ -252,7 +253,8 @@ def _infer_exchange_item(product_type: str) -> str:
 
 
 def _build_research_sections(research: ResearchOutput) -> str:
-    """Build PRODUCT KNOWLEDGE, BUYER NOTES, and WHEN STUCK sections.
+    """Build PRODUCT KNOWLEDGE, RECOMMENDED PRODUCTS, NEGOTIATION INTELLIGENCE,
+    INSIDER KNOWLEDGE, BUYER NOTES, and WHEN STUCK sections.
 
     All sections are conditional — empty research data = section omitted.
     """
@@ -262,7 +264,7 @@ def _build_research_sections(research: ResearchOutput) -> str:
     knowledge_lines = []
     if research.product_summary:
         knowledge_lines.append(research.product_summary)
-    for cp in research.competing_products[:3]:
+    for cp in research.competing_products[:5]:
         name = cp.get("name", "")
         price_range = cp.get("price_range", "")
         pros = cp.get("pros", "")
@@ -277,15 +279,63 @@ def _build_research_sections(research: ResearchOutput) -> str:
         parts.append("PRODUCT KNOWLEDGE:\n" + "\n".join(knowledge_lines)
                       + "\nIf shopkeeper asks 'which model?', name one of these.")
 
-    # BUYER NOTES — top 3 important_notes
+    # RECOMMENDED PRODUCTS — top picks from research
+    if research.recommended_products:
+        rec_lines = []
+        for rp in research.recommended_products[:3]:
+            model = rp.get("model", "")
+            street_price = rp.get("street_price", "")
+            specs = rp.get("specs", "")
+            if model:
+                line = f"- {model}"
+                if street_price:
+                    line += f" (~{street_price} online)"
+                if specs:
+                    line += f" — {specs}"
+                rec_lines.append(line)
+        if rec_lines:
+            parts.append(
+                "RECOMMENDED PRODUCTS:\n" + "\n".join(rec_lines)
+                + '\nCasually mention these if relevant: "Maine online dekha tha [model] ka price..."'
+            )
+
+    # NEGOTIATION INTELLIGENCE — margins, seasonal info, tactics
+    if research.negotiation_intelligence:
+        ni = research.negotiation_intelligence
+        neg_lines = []
+        if ni.get("typical_margin"):
+            neg_lines.append(f"- Dealer margin: {ni['typical_margin']}")
+        if ni.get("seasonal_notes"):
+            neg_lines.append(f"- Seasonal: {ni['seasonal_notes']}")
+        if ni.get("bundle_tricks"):
+            neg_lines.append(f"- Watch out: {ni['bundle_tricks']}")
+        if ni.get("online_reference"):
+            neg_lines.append(f"- Online price: {ni['online_reference']}")
+        if neg_lines:
+            parts.append(
+                "NEGOTIATION INTELLIGENCE:\n" + "\n".join(neg_lines)
+                + "\nUse these naturally — don't dump all at once. Drop one fact at a time when negotiating."
+            )
+
+    # INSIDER KNOWLEDGE — known issues, recalls, market tips
+    if research.insider_knowledge:
+        ik_lines = [f"- {tip}" for tip in research.insider_knowledge[:3]]
+        parts.append(
+            "INSIDER KNOWLEDGE:\n" + "\n".join(ik_lines)
+            + "\nUse strategically — mention only if it helps get a better deal."
+        )
+
+    # BUYER NOTES — important_notes from research
     if research.important_notes:
-        notes = research.important_notes[:3]
+        notes = research.important_notes[:6]
         note_lines = [f"- {n}" for n in notes]
         parts.append("BUYER NOTES:\n" + "\n".join(note_lines))
 
     # WHEN STUCK — strategies for conversation recovery
     first_model = ""
-    if research.competing_products:
+    if research.recommended_products:
+        first_model = research.recommended_products[0].get("model", "")
+    if not first_model and research.competing_products:
         first_model = research.competing_products[0].get("name", "")
     if first_model or research.product_summary:
         stuck_lines = []
@@ -306,6 +356,111 @@ def _build_research_sections(research: ResearchOutput) -> str:
     if not parts:
         return ""
     return "\n" + "\n\n".join(parts) + "\n"
+
+
+def _build_conversation_flow(
+    requirements: ProductRequirements,
+    store: DiscoveredStore,
+    casual: str,
+    topics: list[str],
+    min_topics: int,
+) -> str:
+    """Build product-aware, store-aware conversation flow section.
+
+    Product-aware: AC needs tonnage confirmation, washing machine needs capacity, etc.
+    Store-aware: chain stores get combo/offer questions, local dealers get harder negotiation.
+    """
+    pt = requirements.product_type.lower()
+
+    # Product-specific opening moves
+    product_opener = ""
+    if "ac" in pt:
+        product_opener = (
+            "- After confirming the shop, ask about the AC. If they ask tonnage, confirm it."
+            "\n- If they ask split or window, confirm split (unless your category says otherwise)."
+        )
+    elif "washing machine" in pt:
+        product_opener = (
+            "- After confirming the shop, ask about the washing machine."
+            "\n- If they ask capacity (kg) or front/top load, confirm based on your product specs."
+        )
+    elif any(w in pt for w in ["fridge", "refrigerator"]):
+        product_opener = (
+            "- After confirming the shop, ask about the fridge."
+            "\n- If they ask single or double door, confirm based on your product specs."
+        )
+    elif any(w in pt for w in ["laptop", "computer"]):
+        product_opener = (
+            "- After confirming the shop, ask about the laptop."
+            "\n- If they ask about use case (gaming/work/student), answer naturally based on your requirements."
+        )
+    else:
+        product_opener = f"- After confirming the shop, ask about the {casual}."
+
+    # Store-type-aware negotiation approach
+    store_lower = store.name.lower()
+    is_chain = any(ch in store_lower for ch in ["croma", "reliance", "vijay sales", "poorvika", "pai"])
+    if is_chain:
+        store_approach = (
+            "- This is a chain store — ask about ongoing offers, combos, and exchange deals."
+            "\n- Chain stores have less room for direct price negotiation, but often have card offers and bundled deals."
+        )
+    else:
+        store_approach = (
+            "- This is a local dealer — negotiate more directly on price."
+            "\n- Mention you're checking 2-3 shops. Ask for their best price. Push back gently on the first quote."
+        )
+
+    topic_flow = " → ".join(topics)
+
+    return f"""CONVERSATION FLOW:
+{product_opener}
+- Ask ONE question at a time. Do not stack 2-3 questions in one response.
+- Cover these topics naturally: {topic_flow}
+{store_approach}
+- After getting the price and at least {min_topics} other details, wrap up and CALL the end_call tool
+- Follow the shopkeeper's responses naturally — don't go through a checklist"""
+
+
+def _build_negotiation_section(research: ResearchOutput) -> str:
+    """Build negotiation tactics section from research intelligence.
+
+    Returns empty string if no negotiation-relevant data exists.
+    """
+    lines = []
+
+    # Reference competitor/online prices
+    if research.market_price_range:
+        low = research.market_price_range[0]
+        lines.append(
+            f'- If the price seems high, say casually: "Online toh {low} ke aas paas dikh raha tha"'
+        )
+
+    # Mention shopping around
+    lines.append(
+        '- Mention you are comparing: "Main 2-3 shops se rate le raha hoon, best price do toh aaj hi le lunga"'
+    )
+
+    # Use negotiation intelligence from research
+    ni = research.negotiation_intelligence
+    if ni.get("online_reference"):
+        lines.append(f'- Online reference: {ni["online_reference"]}')
+    if ni.get("bundle_tricks"):
+        lines.append(f'- Watch out for: {ni["bundle_tricks"]}')
+
+    # Recommended product knowledge as leverage
+    if research.recommended_products:
+        model = research.recommended_products[0].get("model", "")
+        price = research.recommended_products[0].get("street_price", "")
+        if model and price:
+            lines.append(
+                f'- If relevant, mention: "{model} ka online price {price} dikh raha tha"'
+            )
+
+    lines.append('- Keep negotiation GENTLE — you are a savvy buyer, not aggressive.')
+    lines.append('- If the shopkeeper won\'t budge, accept gracefully and move on to other topics.')
+
+    return "NEGOTIATION:\n" + "\n".join(lines)
 
 
 def _build_examples(requirements: ProductRequirements, research: ResearchOutput) -> str:
@@ -331,7 +486,7 @@ def _build_examples(requirements: ProductRequirements, research: ResearchOutput)
             )
 
     return f"""EXAMPLES:
-You: "Bhai sahab, {casual} hai aapke paas?"
+You: "Bhaisaab, {casual} hai aapke paas?"
 Shopkeeper: "Haan, {price} ka hai."
 You: "Achha, {price}. Installation free hai kya?"{model_recovery}
 Shopkeeper: "Haan free hai."

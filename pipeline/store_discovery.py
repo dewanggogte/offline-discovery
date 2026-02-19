@@ -218,6 +218,8 @@ Output a JSON array of stores. For each store, extract:
 - city: The city
 - nearby_area: A nearby residential area (for the voice agent to say "I live near...")
 - source: "google_maps" or "web_search"
+- specialist: true if the store specializes in {product_type} (not a general department store), false otherwise
+- relevance_score: 0.0-1.0 how relevant this store is for buying {product_type} (1.0 = dedicated {product_type} dealer, 0.5 = general electronics, 0.2 = tangentially related)
 
 Rules:
 - Remove duplicate stores (same store, different sources)
@@ -255,6 +257,42 @@ Output ONLY the JSON array, nothing else."""
             return _structure_stores(raw_stores, location)
 
     return [DiscoveredStore.from_dict(s) for s in stores_data]
+
+
+def rank_stores(stores: list[DiscoveredStore], top_n: int = 4) -> list[DiscoveredStore]:
+    """Score and rank stores for auto-selection.
+
+    Scoring formula (weights sum to 1.0):
+    - rating (0-5, normalized to 0-1):        30%
+    - log(review_count) (normalized to 0-1):   20%
+    - phone_available:                          30%
+    - google_maps_source:                       10%
+    - relevance_score (from LLM assessment):    10%
+
+    Returns top_n stores sorted by descending score.
+    """
+    import math
+
+    scored = []
+    for store in stores:
+        rating_norm = (store.rating or 0) / 5.0
+        reviews = max(store.review_count or 0, 1)
+        review_norm = min(math.log10(reviews) / 4.0, 1.0)  # log10(10000)=4 → 1.0
+        phone_score = 1.0 if store.phone else 0.0
+        maps_score = 1.0 if store.source == "google_maps" else 0.0
+        relevance = store.relevance_score
+
+        total = (
+            0.30 * rating_norm
+            + 0.20 * review_norm
+            + 0.30 * phone_score
+            + 0.10 * maps_score
+            + 0.10 * relevance
+        )
+        scored.append((total, store))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [store for _, store in scored[:top_n]]
 
 
 def _structure_stores(raw_stores: list[dict], location: str) -> list[DiscoveredStore]:

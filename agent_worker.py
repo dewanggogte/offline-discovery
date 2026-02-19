@@ -537,7 +537,7 @@ VOICE & TONE:
 - Use fillers naturally: "haan", "achha", "hmm", "ji"
 - Keep answers SHORT — 1 line, max 2. Don't give speeches.
 - React naturally to what the shopkeeper says.
-- Use "bhai sahab" ONLY ONCE at the beginning. After that just say "ji" or nothing.
+- Use "bhaisaab" ONLY ONCE at the beginning. After that just say "ji" or nothing.
 
 WHAT YOU CARE ABOUT:
 - Price — "Best price kya doge?" / "Final kitna lagega?"
@@ -557,6 +557,12 @@ CONVERSATION FLOW:
 - Cover these topics naturally: price → warranty → installation → delivery
 - After getting the price and at least 2 other details, wrap up and CALL the end_call tool
 - Follow the shopkeeper's responses naturally — don't go through a checklist
+
+NEGOTIATION:
+- Mention you are comparing: "Main 2-3 shops se rate le raha hoon, best price do toh aaj hi le lunga"
+- If the price seems high, push back gently: "Thoda zyada lag raha hai, kuch kam ho sakta hai?"
+- Keep negotiation GENTLE — you are a savvy buyer, not aggressive.
+- If the shopkeeper won't budge, accept gracefully and move on to other topics.
 
 INTERRUPTIONS:
 - If your previous message shows [interrupted], it means the shopkeeper interrupted you mid-sentence.
@@ -608,7 +614,7 @@ CRITICAL OUTPUT RULES:
 - Only output the exact words you would speak. Nothing else.
 
 EXAMPLES:
-You: "Bhai sahab, Samsung 1.5 ton ka 5 star inverter split AC hai aapke paas?"
+You: "Bhaisaab, Samsung 1.5 ton ka 5 star inverter split AC hai aapke paas?"
 Shopkeeper: "Haan, 38000 ka hai."
 You: "Achha, 38000. Installation free hai kya?"
 Shopkeeper: "Haan free hai."
@@ -691,6 +697,10 @@ PRODUCT: {product_description}
 STORE: {store_name}{area_info}
 """
 
+    # Voice config — read from dispatch metadata (for A/B experiments) or use defaults
+    voice_speaker = metadata.get("voice_speaker", "shubh") if metadata else "shubh"
+    voice_pace = float(metadata.get("voice_pace", 1.0)) if metadata else 1.0
+
     # Create the agent session with Sarvam STT/TTS + switchable LLM (Claude or Qwen)
     session = AgentSession(
         # Turn detection — multilingual transformer model predicts end-of-utterance
@@ -698,8 +708,8 @@ STORE: {store_name}{area_info}
         turn_detection=MultilingualModel(),
         # Voice Activity Detection — detect when someone is speaking
         vad=silero.VAD.load(
-            min_speech_duration=0.08,    # 80ms — filter out short noise bursts (default 50ms)
-            min_silence_duration=0.8,    # 800ms — wait longer before ending speech turn (default 550ms)
+            min_speech_duration=0.15,    # 150ms — filter out short noise bursts (up from 80ms for fewer false turns)
+            min_silence_duration=0.5,    # 500ms — faster turn detection (down from 800ms, Phase A latency target)
             activation_threshold=0.5,    # default — speech probability to start detection
         ),
         # Speech-to-Text — Sarvam saaras:v3 for Hindi/Hinglish
@@ -716,9 +726,9 @@ STORE: {store_name}{area_info}
         tts=sarvam.TTS(
             model="bulbul:v3",
             target_language_code="hi-IN",
-            speaker="shubh",  # v3 male voice; others: aditya, rahul, rohan, amit, dev, varun, ratan; female: ritu, priya, neha, pooja, simran
+            speaker=voice_speaker,  # v3 male voice; others: aditya, rahul, rohan, amit, dev, varun, ratan; female: ritu, priya, neha, pooja, simran
             api_key=os.environ.get("SARVAM_API_KEY"),
-            pace=1.0,
+            pace=voice_pace,
             pitch=0,
             loudness=1.5,
             speech_sample_rate=16000 if is_browser else 8000,  # 16kHz browser / 8kHz telephony
@@ -729,7 +739,7 @@ STORE: {store_name}{area_info}
         min_interruption_words=2,        # Require 2+ words — filters "hmm", "haan" backchannels
         false_interruption_timeout=2.0,  # Wait 2s before declaring false interruption
         resume_false_interruption=True,  # Resume speaking after false interruption
-        min_endpointing_delay=0.5,       # 500ms after last speech before declaring turn complete
+        min_endpointing_delay=0.3,       # 300ms after last speech before declaring turn complete (down from 500ms, Phase A)
     )
 
     # ---- Transcript collection & conversation logging ----

@@ -12,6 +12,7 @@ import pytest
 from pathlib import Path
 
 from call_analysis import ConstraintChecker, ConversationScorer
+from tests.shopkeeper_scenarios import PRODUCT_SCENARIOS, SCENARIOS
 
 TRANSCRIPTS_DIR = Path(__file__).parent.parent / "transcripts"
 
@@ -41,7 +42,7 @@ class TestConstraintChecker:
         assert "Devanagari" in reason
 
     def test_clean_romanized_passes(self, constraint_checker):
-        result = constraint_checker.check_all("Achha bhai sahab, rate kya hai?")
+        result = constraint_checker.check_all("Achha bhaisaab, rate kya hai?")
         assert result['passed']
         assert result['score'] == 1.0
 
@@ -121,7 +122,7 @@ class TestConversationScorer:
     def test_good_conversation_scores_high(self, conversation_scorer):
         messages = [
             {"role": "user", "text": "Haan ji, Samsung hai."},
-            {"role": "assistant", "text": "Bhai sahab, dedh ton ka paanch star inverter split AC ka rate kya hai?"},
+            {"role": "assistant", "text": "Bhaisaab, dedh ton ka paanch star inverter split AC ka rate kya hai?"},
             {"role": "user", "text": "Adtees hazaar ka hai."},
             {"role": "assistant", "text": "Achha, adtees hazaar. Installation free hai ya alag se?"},
             {"role": "user", "text": "Installation free hai. Warranty ek saal milegi."},
@@ -205,8 +206,8 @@ class TestConversationScorer:
 
     def test_repetition_detected(self, conversation_scorer):
         messages = [
-            {"role": "assistant", "text": "Samsung dedh ton ka AC ka rate kya hai bhai sahab?"},
-            {"role": "assistant", "text": "Samsung dedh ton ka AC ka rate kya hai bhai sahab?"},
+            {"role": "assistant", "text": "Samsung dedh ton ka AC ka rate kya hai bhaisaab?"},
+            {"role": "assistant", "text": "Samsung dedh ton ka AC ka rate kya hai bhaisaab?"},
         ]
         result = conversation_scorer.score_conversation(messages)
         assert result['repetition_score'] < 1.0
@@ -317,7 +318,7 @@ class TestEdgeCaseDetection:
 
     def test_interrupted_not_repeated(self):
         """Agent should not repeat text that was interrupted."""
-        interrupted_text = "Bhai sahab, Samsung dedh ton ka paanch star"
+        interrupted_text = "Bhaisaab, Samsung dedh ton ka paanch star"
         next_response = "Haan ji, toh aapke paas Samsung hai? Rate bataaiye."
         # The next response should NOT contain a significant chunk of the interrupted text
         interrupted_words = set(interrupted_text.lower().split())
@@ -342,3 +343,137 @@ class TestEdgeCaseDetection:
                        if m.get("interrupted")]
         assert len(interrupted) == 1
         assert interrupted[0]["text"] == "Achha rate bataaiye"
+
+
+# ---------------------------------------------------------------------------
+# TestProductScenarios — validate scenario structure for all product types
+# ---------------------------------------------------------------------------
+class TestProductScenarios:
+
+    def test_backward_compat_scenarios_is_ac(self):
+        """SCENARIOS should be the same as PRODUCT_SCENARIOS['AC']."""
+        assert SCENARIOS is PRODUCT_SCENARIOS["AC"]
+
+    def test_all_products_have_scenarios(self):
+        assert "AC" in PRODUCT_SCENARIOS
+        assert "washing_machine" in PRODUCT_SCENARIOS
+        assert "fridge" in PRODUCT_SCENARIOS
+        assert "laptop" in PRODUCT_SCENARIOS
+
+    def test_each_product_has_cooperative(self):
+        for product, scenarios in PRODUCT_SCENARIOS.items():
+            assert "cooperative_direct" in scenarios, \
+                f"{product} missing cooperative_direct scenario"
+
+    def test_each_scenario_has_required_fields(self):
+        for product, scenarios in PRODUCT_SCENARIOS.items():
+            for name, scenario in scenarios.items():
+                assert "description" in scenario, f"{product}/{name} missing description"
+                assert "shopkeeper_turns" in scenario, f"{product}/{name} missing shopkeeper_turns"
+                assert len(scenario["shopkeeper_turns"]) >= 2, \
+                    f"{product}/{name} needs at least 2 shopkeeper turns"
+                assert "expected_topics" in scenario, f"{product}/{name} missing expected_topics"
+
+    def test_ac_scenario_count_preserved(self):
+        """AC should still have all 11 original scenarios."""
+        assert len(PRODUCT_SCENARIOS["AC"]) == 11
+
+    def test_wm_has_multiple_scenarios(self):
+        assert len(PRODUCT_SCENARIOS["washing_machine"]) >= 3
+
+    def test_fridge_has_multiple_scenarios(self):
+        assert len(PRODUCT_SCENARIOS["fridge"]) >= 3
+
+    def test_laptop_has_multiple_scenarios(self):
+        assert len(PRODUCT_SCENARIOS["laptop"]) >= 3
+
+
+# ---------------------------------------------------------------------------
+# TestNewScoringDimensions — validate the 3 new scoring methods
+# ---------------------------------------------------------------------------
+class TestNewScoringDimensions:
+
+    def test_product_knowledge_ac(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Bhaisaab, dedh ton ka paanch star inverter split AC ka rate kya hai?"},
+            {"role": "user", "text": "Adtees hazaar."},
+            {"role": "assistant", "text": "Achha. Copper condenser hai ya aluminium?"},
+        ]
+        score = conversation_scorer.score_product_knowledge(messages, "AC")
+        assert score >= 0.6  # mentions ton, star, inverter, split, copper/aluminium
+
+    def test_product_knowledge_wm(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Front load saat kg washing machine ka rate bataaiye."},
+            {"role": "user", "text": "Bayaalees hazaar."},
+            {"role": "assistant", "text": "Achha. Fully automatic hai? Motor pe warranty kitni hai?"},
+        ]
+        score = conversation_scorer.score_product_knowledge(messages, "washing_machine")
+        assert score >= 0.6  # mentions front load, kg, motor, automatic
+
+    def test_product_knowledge_zero_for_generic(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Rate bataaiye."},
+            {"role": "user", "text": "Adtees hazaar."},
+            {"role": "assistant", "text": "Achha theek hai."},
+        ]
+        score = conversation_scorer.score_product_knowledge(messages, "AC")
+        assert score == 0.0
+
+    def test_negotiation_effectiveness_high(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Online pe toh 36000 mein mil raha hai. Aapka best price kya hoga?"},
+            {"role": "user", "text": "Chaalees hazaar final hai."},
+            {"role": "assistant", "text": "Doosri dukaan mein 2-3 shops pe check kiya, kam mein mil raha hai."},
+        ]
+        score = conversation_scorer.score_negotiation_effectiveness(messages)
+        assert score >= 0.7  # mentions online, 2-3 shops, best price
+
+    def test_negotiation_effectiveness_zero(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Rate bataaiye."},
+            {"role": "user", "text": "Adtees hazaar."},
+            {"role": "assistant", "text": "Achha theek hai."},
+        ]
+        score = conversation_scorer.score_negotiation_effectiveness(messages)
+        assert score == 0.0
+
+    def test_character_maintenance_high(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "Bhaisaab, Samsung AC ka rate kya hai?"},
+            {"role": "assistant", "text": "Achha adtees hazaar. Installation free hai?"},
+            {"role": "assistant", "text": "Theek hai ji, dhanyavaad."},
+        ]
+        score = conversation_scorer.score_character_maintenance(messages)
+        assert score == 1.0
+
+    def test_character_maintenance_low_for_ai_speak(self, conversation_scorer):
+        messages = [
+            {"role": "assistant", "text": "I am an AI assistant. How can I help you today?"},
+            {"role": "assistant", "text": "Sure! I'd be happy to help with that."},
+            {"role": "assistant", "text": "Thank you for your patience."},
+        ]
+        score = conversation_scorer.score_character_maintenance(messages)
+        assert score == 0.0
+
+    def test_updated_weights_sum_to_one(self, conversation_scorer):
+        """Verify the updated scoring weights sum to 1.0."""
+        messages = [
+            {"role": "user", "text": "Haan ji."},
+            {"role": "assistant", "text": "Rate bataaiye."},
+        ]
+        # The implementation uses: 0.30 + 0.20 + 0.10 + 0.05 + 0.05 + 0.10 + 0.10 + 0.10 = 1.00
+        result = conversation_scorer.score_conversation(messages)
+        assert 'product_knowledge_score' in result
+        assert 'negotiation_score' in result
+        assert 'character_score' in result
+
+    def test_score_conversation_with_product_type(self, conversation_scorer):
+        messages = [
+            {"role": "user", "text": "Haan ji."},
+            {"role": "assistant", "text": "Front load saat kg ka rate bataaiye."},
+            {"role": "user", "text": "Bayaalees hazaar."},
+            {"role": "assistant", "text": "Achha, bayaalees hazaar. Motor pe warranty kitni hai?"},
+        ]
+        result = conversation_scorer.score_conversation(messages, product_type="washing_machine")
+        assert result['product_knowledge_score'] > 0.0

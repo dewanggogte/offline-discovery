@@ -125,7 +125,8 @@ class ConversationScorer:
         self.checker = checker
         self.TOPIC_KEYWORDS = topic_keywords or self.DEFAULT_TOPIC_KEYWORDS
 
-    def score_conversation(self, messages: list[dict]) -> dict:
+    def score_conversation(self, messages: list[dict],
+                           product_type: str = "AC") -> dict:
         assistant_msgs = [m for m in messages if m.get('role') == 'assistant']
         if not assistant_msgs:
             return {'overall_score': 0.0, 'per_turn': [], 'topics_covered': set(),
@@ -140,13 +141,21 @@ class ConversationScorer:
         price_echo_score = self.check_price_echo(messages)
         brevity_score = self._brevity_score(assistant_msgs)
         repetition_score = self._no_repetition_score(assistant_msgs)
+        product_knowledge_score = self.score_product_knowledge(messages, product_type)
+        negotiation_score = self.score_negotiation_effectiveness(messages)
+        character_score = self.score_character_maintenance(messages)
 
+        # Weights: constraint 30%, topic 20%, price_echo 10%, brevity 5%,
+        # repetition 5%, product_knowledge 10%, negotiation 10%, character 10%
         overall = (
-            constraint_score * 0.40 +
-            topic_score * 0.25 +
-            price_echo_score * 0.15 +
-            brevity_score * 0.10 +
-            repetition_score * 0.10
+            constraint_score * 0.30 +
+            topic_score * 0.20 +
+            price_echo_score * 0.10 +
+            brevity_score * 0.05 +
+            repetition_score * 0.05 +
+            product_knowledge_score * 0.10 +
+            negotiation_score * 0.10 +
+            character_score * 0.10
         )
 
         return {
@@ -156,6 +165,9 @@ class ConversationScorer:
             'price_echo_score': round(price_echo_score, 3),
             'brevity_score': round(brevity_score, 3),
             'repetition_score': round(repetition_score, 3),
+            'product_knowledge_score': round(product_knowledge_score, 3),
+            'negotiation_score': round(negotiation_score, 3),
+            'character_score': round(character_score, 3),
             'topics_covered': topics,
             'per_turn': per_turn,
             'turn_count': len(assistant_msgs),
@@ -336,6 +348,113 @@ class ConversationScorer:
                 repetitions += 1
         return max(0.0, 1.0 - repetitions / len(assistant_msgs))
 
+    # ------------------------------------------------------------------
+    # Product knowledge scoring — does the agent use product-relevant terms?
+    # ------------------------------------------------------------------
+    PRODUCT_TERMS = {
+        'AC': [r'ton', r'star', r'inverter', r'split', r'window', r'compressor',
+               r'copper', r'aluminium', r'cooling', r'BEE', r'ISEER'],
+        'washing_machine': [r'front.?load', r'top.?load', r'kg', r'capacity',
+                            r'drum', r'RPM', r'spin', r'motor', r'automatic'],
+        'fridge': [r'litre', r'double.?door', r'single.?door', r'side.?by.?side',
+                   r'convertible', r'compressor', r'freezer', r'frost.?free'],
+        'laptop': [r'processor', r'RAM', r'SSD', r'i[357]', r'battery', r'screen',
+                   r'inch', r'GPU', r'Ryzen', r'display'],
+    }
+
+    def score_product_knowledge(self, messages: list[dict],
+                                product_type: str = "AC") -> float:
+        """Score how well the agent demonstrates product expertise.
+
+        Checks if agent uses product-relevant technical terms in its responses.
+        Returns 0.0-1.0 based on variety of terms used.
+        """
+        assistant_text = ' '.join(
+            m.get('text', '') for m in messages if m.get('role') == 'assistant'
+        )
+        if not assistant_text:
+            return 0.0
+
+        terms = self.PRODUCT_TERMS.get(product_type, self.PRODUCT_TERMS['AC'])
+        matches = sum(
+            1 for pat in terms if re.search(pat, assistant_text, re.IGNORECASE)
+        )
+        # Score: 1 term = 0.3, 2 terms = 0.6, 3+ terms = 1.0
+        if matches >= 3:
+            return 1.0
+        if matches >= 2:
+            return 0.6
+        if matches >= 1:
+            return 0.3
+        return 0.0
+
+    # ------------------------------------------------------------------
+    # Negotiation effectiveness — does the agent use negotiation tactics?
+    # ------------------------------------------------------------------
+    _NEGOTIATION_PATTERNS = [
+        r'online',             # references online prices
+        r'2-3 shops|doosri dukaan|aur.*shop',  # comparison shopping
+        r'best price|final price|achha price|kam.*ho',  # price negotiation
+        r'kuch discount|offer|combo',  # asks for deals
+    ]
+
+    def score_negotiation_effectiveness(self, messages: list[dict]) -> float:
+        """Score the agent's negotiation tactics.
+
+        Checks for price anchoring, comparison shopping references,
+        and polite negotiation attempts. Returns 0.0-1.0.
+        """
+        assistant_text = ' '.join(
+            m.get('text', '') for m in messages if m.get('role') == 'assistant'
+        )
+        if not assistant_text:
+            return 0.0
+
+        matches = sum(
+            1 for pat in self._NEGOTIATION_PATTERNS
+            if re.search(pat, assistant_text, re.IGNORECASE)
+        )
+        # Score: 1 tactic = 0.3, 2 = 0.7, 3+ = 1.0
+        if matches >= 3:
+            return 1.0
+        if matches >= 2:
+            return 0.7
+        if matches >= 1:
+            return 0.3
+        return 0.0
+
+    # ------------------------------------------------------------------
+    # Character maintenance — does the agent stay in character throughout?
+    # ------------------------------------------------------------------
+    _OUT_OF_CHARACTER = [
+        re.compile(r'\b(I am an? AI|language model|I cannot|as an assistant)\b', re.I),
+        re.compile(r'\b(sure!|absolutely!|great question)\b', re.I),
+        re.compile(r'\b(thank you for|I appreciate|happy to help)\b', re.I),
+        re.compile(r'["""].*?["""]', re.I),  # quoting in English
+    ]
+
+    def score_character_maintenance(self, messages: list[dict]) -> float:
+        """Score how well the agent maintains its Hindi caller persona.
+
+        Penalizes English customer-service phrases, AI self-references,
+        and overly polite English expressions. Returns 0.0-1.0.
+        """
+        assistant_msgs = [m for m in messages if m.get('role') == 'assistant']
+        if not assistant_msgs:
+            return 0.0
+
+        violations = 0
+        for msg in assistant_msgs:
+            text = msg.get('text', '')
+            for pat in self._OUT_OF_CHARACTER:
+                if pat.search(text):
+                    violations += 1
+                    break  # max 1 violation per turn
+
+        if violations == 0:
+            return 1.0
+        return max(0.0, 1.0 - violations / len(assistant_msgs))
+
 
 # ---------------------------------------------------------------------------
 # Transcript analysis — run full analysis on a transcript dict
@@ -452,6 +571,9 @@ def analyze_transcript(data: dict) -> dict:
             "price_echo": scores['price_echo_score'],
             "brevity": scores['brevity_score'],
             "repetition": scores['repetition_score'],
+            "product_knowledge": scores.get('product_knowledge_score', 0.0),
+            "negotiation": scores.get('negotiation_score', 0.0),
+            "character": scores.get('character_score', 0.0),
         },
         "topics_covered": scores['topics_covered'],
         "turn_count": scores['turn_count'],

@@ -38,6 +38,11 @@ v1/
 # Temp files
 temp.md
 
+# Non-technical documentation
+funding.md
+market_analysis.md
+blog.md
+
 # IDE
 .vscode/
 .idea/

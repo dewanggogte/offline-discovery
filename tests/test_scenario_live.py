@@ -119,7 +119,7 @@ class TestSingleTurnConstraints:
     def test_price_echo(self, claude_client, system_prompt, checker):
         messages = [
             {"role": "user", "content": "Haan ji boliye."},
-            {"role": "assistant", "content": "Bhai sahab, Samsung dedh ton ka paanch star inverter split AC ka rate bataaiye."},
+            {"role": "assistant", "content": "Bhaisaab, Samsung dedh ton ka paanch star inverter split AC ka rate bataaiye."},
             {"role": "user", "content": "Adtees hazaar ka hai."},
         ]
         response = _call_claude(claude_client, messages, system_prompt)

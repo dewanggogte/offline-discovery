@@ -85,7 +85,7 @@ class TestCharacterBreakDetection:
         assert _is_character_break("I only speak Hindi. Let me try again in the correct language.") is True
 
     def test_hindi_markers_present(self):
-        assert _is_character_break("Haan ji, price bata dijiye bhai sahab") is False
+        assert _is_character_break("Haan ji, price bata dijiye bhaisaab") is False
 
 
 class TestSTTGarbageFilter:

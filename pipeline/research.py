@@ -28,7 +28,7 @@ Use the web_search tool to find:
 4. What questions to ask the shopkeeper
 5. Competing products in the same range
 
-After researching (1-2 searches maximum), output your findings as a JSON block wrapped in <research> tags:
+After researching (1-3 searches), output your findings as a JSON block wrapped in <research> tags:
 
 <research>
 {
@@ -52,16 +52,29 @@ After researching (1-2 searches maximum), output your findings as a JSON block w
   "important_notes": ["List of buyer warnings or things to watch out for"],
   "competing_products": [
     {"name": "Product Name", "price_range": "30000-35000", "pros": "...", "cons": "..."}
-  ]
+  ],
+  "recommended_products": [
+    {"model": "Exact model name", "specs": "Key specs", "street_price": 35000, "why": "Why recommended"}
+  ],
+  "negotiation_intelligence": {
+    "typical_margin": "Dealer margin info if known",
+    "seasonal_notes": "Seasonal pricing info if known",
+    "bundle_tricks": "Common upselling tactics if known",
+    "online_reference": "Online price reference if found"
+  },
+  "insider_knowledge": ["Any recent issues, recalls, or market tips found during research"]
 }
 </research>
 
 Important:
+- PRIORITY ORDER: Focus first on product_summary, market_price_range, questions_to_ask, topics_to_cover, competing_products. These are the CORE fields — make them detailed and thorough.
 - questions_to_ask should be in Romanized Hindi (the voice agent will ask these in Hindi)
 - topic_keywords are regex patterns used for post-call analysis (keep them simple)
 - Order questions_to_ask by priority: price first, then important details, then optional ones
 - Include at least 5-7 questions covering price, warranty, installation, delivery
 - market_price_range should be realistic street prices, not MRP
+- competing_products: include at least 3 products with specific model names, realistic price ranges, and meaningful pros/cons
+- recommended_products, negotiation_intelligence, insider_knowledge are BONUS fields. Include them if your research uncovered relevant info, but do NOT sacrifice detail in the core fields to fill these. Omit or leave empty if not found.
 """
 
 SEARCH_TOOL = {
@@ -122,7 +135,7 @@ Research the current market prices, key features, and prepare questions for call
     messages = [{"role": "user", "content": user_prompt}]
 
     # Tool-use loop: LLM searches, processes, then outputs research
-    max_rounds = 3
+    max_rounds = 4
     for round_num in range(max_rounds):
         logger.info(f"LLM round {round_num + 1}/{max_rounds}...")
         response = await asyncio.to_thread(

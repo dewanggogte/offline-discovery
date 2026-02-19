@@ -17,7 +17,6 @@ Endpoints:
   POST /api/session/{id}/call/{n}  → Start call simulation
   POST /api/session/{id}/analyze   → Cross-store comparison
   GET  /api/session/{id}/status    → Pipeline state
-  GET  /api/token                  → Quick-call agent token
   GET  /api/metrics                → Dashboard metrics
   GET  /api/logs                   → Agent worker logs
 """
@@ -391,12 +390,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <body>
   <div class="wrap">
     <header class="site-header">
-      <h1><a href="https://dewanggogte.com" target="_blank">Dewang Gogte</a></h1>
+      <h1>CallKaro</h1>
     </header>
 
     <div class="tab-bar">
       <button class="tab-btn active" onclick="switchTab('pipeline')">Research</button>
-      <button class="tab-btn" onclick="switchTab('voice')">Quick Call</button>
       <button class="tab-btn" onclick="switchTab('dashboard')">Dashboard</button>
     </div>
 
@@ -436,7 +434,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3>Research Findings</h3>
           </div>
           <h3 style="font-size:1rem;font-weight:500;margin:1rem 0 .5rem">Stores Found</h3>
-          <p style="font-size:.85rem;color:var(--text-light);margin-bottom:.75rem">Select stores to call:</p>
+          <p style="font-size:.85rem;color:var(--text-light);margin-bottom:.75rem" id="store-instruction">Select stores to call:</p>
           <div id="store-list"></div>
           <div class="store-counter" id="store-counter" style="display:none">
             <strong id="store-sel-count">0</strong> of <span id="store-total">0</span> stores selected
@@ -444,6 +442,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <div class="btn-row">
             <button class="btn btn-primary" id="btn-start-calls" onclick="showCallConfirm()" disabled>
               Start Calling Selected Stores
+            </button>
+            <button class="btn btn-secondary" id="btn-edit-stores" onclick="enableManualStoreSelection()" style="display:none;font-size:.85rem">
+              Change Stores
             </button>
           </div>
         </div>
@@ -484,24 +485,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Quick Call Tab (legacy voice test) -->
-    <div id="tab-voice" class="tab-content">
-      <h2 style="font-size:1.3rem;font-weight:500;margin-bottom:.25rem">Quick Call</h2>
-      <p style="color:var(--text-light);font-size:.9rem;margin-bottom:1rem">
-        Direct call simulation with the price enquiry agent. Pretend to be a shopkeeper.
-      </p>
-      <div class="btn-row" style="margin-bottom:1rem">
-        <button class="btn btn-primary" id="qc-start" onclick="qcStart()">Start Conversation</button>
-        <button class="btn btn-danger" id="qc-end" onclick="qcEnd()" disabled>End</button>
-      </div>
-      <div class="call-status" id="qc-status"><span class="dot dot-idle"></span>Ready</div>
-      <div class="viz-row">
-        <div class="viz-box"><div class="viz-label">Your Mic</div><canvas id="qcMicViz"></canvas></div>
-        <div class="viz-box"><div class="viz-label">Agent Audio</div><canvas id="qcAgentViz"></canvas></div>
-      </div>
-      <div id="qc-log" style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:.6rem;max-height:150px;overflow-y:auto;font-family:monospace;font-size:.7rem;color:var(--text-light);margin-top:.75rem"></div>
-    </div>
-
     <!-- Dashboard Tab -->
     <div id="tab-dashboard" class="tab-content">
       <div class="dash-wrap">
@@ -512,8 +495,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     <section class="links-section">
       <div class="footer-row">
-        <a href="https://dewanggogte.com" target="_blank">Home</a>
-        <a href="https://dewanggogte.com/blog" target="_blank">Blog</a>
+        <span style="font-size:.8rem;color:var(--text-light)">CallKaro — Voice Price Comparison</span>
       </div>
     </section>
   </div>
@@ -635,11 +617,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
      ================================================================ */
   let dashLoaded = false;
   function switchTab(name) {
-    ['pipeline','voice','dashboard'].forEach(t => {
+    ['pipeline','dashboard'].forEach(t => {
       document.getElementById('tab-'+t).classList.toggle('active', t === name);
     });
     document.querySelectorAll('.tab-btn').forEach((b,i) => {
-      const tabs = ['pipeline','voice','dashboard'];
+      const tabs = ['pipeline','dashboard'];
       b.classList.toggle('active', tabs[i] === name);
     });
     if (name === 'dashboard' && !dashLoaded) loadDashboard();
@@ -696,6 +678,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
       const data = await resp.json();
       addChatMsg('intake-chat', data.response, 'assistant');
 
+      // Render suggestion chips if provided
+      if (data.suggestions && data.suggestions.length > 0) {
+        renderSuggestionChips('intake-chat', data.suggestions);
+      }
+
       if (data.done) {
         // Show requirements summary and move to step 2
         if (data.requirements) {
@@ -711,12 +698,36 @@ HTML_PAGE = r"""<!DOCTYPE html>
     document.getElementById('intake-send').disabled = false;
   }
 
+  function escapeHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
   function addChatMsg(containerId, text, role) {
     const el = document.getElementById(containerId);
     const div = document.createElement('div');
     div.className = 'chat-msg ' + role;
-    div.innerHTML = `<div class="bubble">${text.replace(/\n/g,'<br>')}</div>`;
+    div.innerHTML = `<div class="bubble">${escapeHtml(text).replace(/\*\*(.*?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>')}</div>`;
     el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderSuggestionChips(containerId, suggestions) {
+    const el = document.getElementById(containerId);
+    const chipRow = document.createElement('div');
+    chipRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px 0;';
+    suggestions.forEach(s => {
+      const chip = document.createElement('button');
+      chip.textContent = s;
+      chip.style.cssText = 'padding:6px 14px;border-radius:16px;border:1px solid var(--primary);background:var(--bg);color:var(--primary);font-size:.85rem;cursor:pointer;transition:all .15s;';
+      chip.onmouseenter = () => { chip.style.background = 'var(--primary)'; chip.style.color = '#fff'; };
+      chip.onmouseleave = () => { chip.style.background = 'var(--bg)'; chip.style.color = 'var(--primary)'; };
+      chip.onclick = () => {
+        document.getElementById('intake-input').value = s;
+        chipRow.remove();
+        document.getElementById('intake-send').click();
+      };
+      chipRow.appendChild(chip);
+    });
+    el.appendChild(chipRow);
     el.scrollTop = el.scrollHeight;
   }
 
@@ -808,6 +819,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     researchPhaseActive = false;
 
     storesData = data.stores;
+    const recommended = new Set(data.recommended_indices || []);
 
     // Render store list
     const sl = document.getElementById('store-list');
@@ -817,18 +829,46 @@ HTML_PAGE = r"""<!DOCTYPE html>
       div.className = 'store-card';
       div.dataset.idx = i;
       div.onclick = () => toggleStore(i, div);
+      const badge = recommended.has(i) ? '<span style="background:var(--accent);color:#fff;font-size:.7rem;padding:2px 8px;border-radius:8px;margin-left:.5rem;letter-spacing:.02em">Best Match</span>' : '';
       div.innerHTML = `
-        <h4>${s.name}</h4>
+        <h4>${escapeHtml(s.name)}${badge}</h4>
         <div class="store-meta">
-          ${s.area ? `<span>${s.area}</span>` : ''}
+          ${s.area ? `<span>${escapeHtml(s.area)}</span>` : ''}
           ${s.rating ? `<span>★ ${s.rating}</span>` : ''}
           ${s.review_count ? `<span>${s.review_count} reviews</span>` : ''}
-          ${s.phone ? `<span>${s.phone}</span>` : ''}
-          <span style="color:var(--accent)">${s.source}</span>
+          ${s.phone ? `<span>${escapeHtml(s.phone)}</span>` : ''}
+          <span style="color:var(--accent)">${escapeHtml(s.source)}</span>
         </div>
       `;
       sl.appendChild(div);
     });
+
+    // Auto-select recommended stores and show per-store reasons
+    if (recommended.size > 0) {
+      recommended.forEach(idx => {
+        const card = sl.querySelector(`[data-idx="${idx}"]`);
+        if (card) toggleStore(idx, card);
+      });
+
+      // Build per-store reason lines
+      const reasons = [...recommended].map(idx => {
+        const s = data.stores[idx];
+        const parts = [];
+        if (s.rating) parts.push(`${s.rating}★`);
+        if (s.review_count) parts.push(`${s.review_count >= 100 ? Math.round(s.review_count/100)*100 + '+' : s.review_count} reviews`);
+        if (s.specialist) parts.push('specialist dealer');
+        if (s.source === 'google_maps') parts.push('verified on Google Maps');
+        if (!s.phone) parts.push('no phone listed');
+        return `<b>${escapeHtml(s.name)}</b>${s.area ? ' (' + escapeHtml(s.area) + ')' : ''} — ${parts.join(', ') || 'nearby store'}`;
+      });
+
+      const instrEl = document.getElementById('store-instruction');
+      instrEl.innerHTML =
+        `<strong>We picked these ${recommended.size} stores to call:</strong>` +
+        `<ul style="margin:.5rem 0 .25rem;padding-left:1.2rem;font-size:.85rem;line-height:1.6">${reasons.map(r => '<li>' + r + '</li>').join('')}</ul>` +
+        `<span style="font-size:.82rem;color:var(--text-light)">Hit "Start Calling" to proceed, or tap stores to change selection.</span>`;
+      document.getElementById('btn-edit-stores').style.display = 'inline-block';
+    }
 
     document.getElementById('research-loading').style.display = 'none';
     document.getElementById('research-results').style.display = 'block';
@@ -843,6 +883,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
     counter.style.display = storesData.length > 0 ? 'block' : 'none';
     document.getElementById('store-sel-count').textContent = selectedStores.size;
     document.getElementById('store-total').textContent = storesData.length;
+  }
+
+  function enableManualStoreSelection() {
+    document.getElementById('store-instruction').textContent = 'Select stores to call:';
+    document.getElementById('btn-edit-stores').style.display = 'none';
   }
 
   /* ================================================================
@@ -1175,50 +1220,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   /* ================================================================
-     Quick Call
-     ================================================================ */
-  let qcRoom = null, qcMic = null, qcAgent = null, qcViz = null;
-  async function qcStart() {
-    document.getElementById('qc-start').disabled = true;
-    document.getElementById('qc-status').innerHTML = '<span class="dot dot-connecting"></span>Connecting...';
-    document.getElementById('qc-log').innerHTML = '';
-    try {
-      const resp = await fetch('/api/token');
-      const data = await resp.json();
-      qcRoom = new Room({ audioCaptureDefaults:{echoCancellation:true,noiseSuppression:true} });
-      qcRoom.on(RoomEvent.TrackSubscribed, (track) => {
-        if (track.kind===Track.Kind.Audio) {
-          const el=track.attach(); el.id='qc-audio'; document.body.appendChild(el);
-          qcAgent=createAnalyser(new MediaStream([track.mediaStreamTrack]));
-          document.getElementById('qc-status').innerHTML='<span class="dot dot-connected"></span>Speaking...';
-        }
-      });
-      qcRoom.on(RoomEvent.Disconnected, () => {
-        document.getElementById('qc-status').innerHTML='<span class="dot dot-idle"></span>Ended';
-        document.getElementById('qc-start').disabled=false; document.getElementById('qc-end').disabled=true;
-        const a=document.getElementById('qc-audio'); if(a) a.remove();
-        qcRoom=null; qcMic=null; qcAgent=null;
-        if(qcViz){cancelAnimationFrame(qcViz);qcViz=null;}
-      });
-      await audioCtx.resume();
-      await qcRoom.connect(data.url, data.token);
-      await qcRoom.localParticipant.setMicrophoneEnabled(true);
-      initCanvas('qcMicViz','qcAgentViz');
-      const mt=qcRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
-      if(mt?.track) qcMic=createAnalyser(new MediaStream([mt.track.mediaStreamTrack]));
-      (function loop(){drawBars(document.getElementById('qcMicViz'),qcMic,'#4a9');drawBars(document.getElementById('qcAgentViz'),qcAgent,'#b85a3b');qcViz=requestAnimationFrame(loop)})();
-      document.getElementById('qc-end').disabled=false;
-    } catch(e) {
-      document.getElementById('qc-status').innerHTML='<span class="dot dot-idle"></span>Error: '+e.message;
-      document.getElementById('qc-start').disabled=false;
-    }
-  }
-  async function qcEnd() {
-    if(qcRoom) await qcRoom.disconnect();
-    document.getElementById('qc-start').disabled=false; document.getElementById('qc-end').disabled=true;
-  }
-
-  /* ================================================================
      Dashboard
      ================================================================ */
   let ttftChart = null, tokenChart = null, latencyChart = null;
@@ -1455,8 +1456,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         elif path == "/":
             self._serve_html()
-        elif path == "/api/token":
-            self._serve_token()
         elif path == "/api/metrics":
             self._serve_metrics()
         elif path.startswith("/api/logs"):
@@ -1723,14 +1722,6 @@ class Handler(BaseHTTPRequestHandler):
         new_messages = messages[since:]
         self._json_response({"messages": new_messages, "total": len(messages)})
 
-    def _serve_token(self):
-        """Create token for direct quick-call agent."""
-        try:
-            token_data = asyncio.run(create_legacy_token())
-            self._json_response(token_data)
-        except Exception as e:
-            self._json_response({"error": str(e)}, 500)
-
     def _serve_metrics(self):
         try:
             from dashboard import parse_transcripts, parse_logs, compute_metrics, run_tests
@@ -1769,47 +1760,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         print(f"  [{self.address_string()}] {format % args}")
 
-
-# ---------------------------------------------------------------------------
-# Legacy token generation (for Quick Call tab)
-# ---------------------------------------------------------------------------
-async def create_legacy_token():
-    from livekit.api import LiveKitAPI, AccessToken, VideoGrants
-    from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
-
-    room_name = f"browser-test-{uuid.uuid4().hex[:8]}"
-    user_identity = f"user-{uuid.uuid4().hex[:6]}"
-
-    token = (
-        AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        .with_identity(user_identity)
-        .with_name("Browser User")
-        .with_grants(VideoGrants(
-            room_join=True,
-            room=room_name,
-            can_publish=True,
-            can_subscribe=True,
-        ))
-        .to_jwt()
-    )
-
-    lk = LiveKitAPI()
-    try:
-        await lk.agent_dispatch.create_dispatch(
-            CreateAgentDispatchRequest(
-                agent_name="price-agent",
-                room=room_name,
-                metadata=json.dumps({
-                    "store_name": "Browser Test",
-                    "product_description": "appliance",
-                    "nearby_area": "Koramangala 4th Block",
-                }),
-            )
-        )
-    finally:
-        await lk.aclose()
-
-    return {"token": token, "url": LIVEKIT_URL, "room": room_name}
 
 
 # ---------------------------------------------------------------------------
