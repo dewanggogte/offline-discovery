@@ -138,14 +138,18 @@ Research the current market prices, key features, and prepare questions for call
     max_rounds = 4
     for round_num in range(max_rounds):
         logger.info(f"LLM round {round_num + 1}/{max_rounds}...")
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=CLAUDE_MODEL,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            tools=[SEARCH_TOOL],
-        )
+        try:
+            response = await asyncio.to_thread(
+                client.messages.create,
+                model=CLAUDE_MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+                tools=[SEARCH_TOOL],
+            )
+        except Exception as e:
+            logger.error(f"Anthropic API error in round {round_num + 1}: {e}")
+            break
 
         # Check if we got a final text response with research output
         if response.stop_reason == "end_turn":
@@ -213,4 +217,10 @@ Research the current market prices, key features, and prepare questions for call
             "delivery": [r"deliver", r"bhej", r"ghar pe", r"din mein", r"kab tak"],
             "exchange": [r"exchange", r"puran[ae]", r"old"],
         },
+        important_notes=[
+            "Always confirm MRP vs street price — street prices can be 10-15% lower",
+            "Check warranty terms: comprehensive vs limited coverage",
+            "Ask about installation charges — some stores bundle free, others charge extra",
+            "Verify delivery timeline and whether old product removal is included",
+        ],
     )

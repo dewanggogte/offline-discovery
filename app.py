@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 
 import logging
 
-from agent_lifecycle import kill_old_agents, start_agent_worker, cleanup_agent, find_agent_log
+from agent_lifecycle import kill_old_agents, start_agent_worker, cleanup_agent, find_agent_log, agent_health
 
 load_dotenv(".env.local")
 
@@ -127,6 +127,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     .step-indicator.done::after { background: var(--green); }
     .step-indicator.done:hover { color: var(--accent); }
     .step-indicator.active { cursor: default; }
+    .step-desc { font-size:.9rem; color:var(--text-light); margin:0 0 .75rem; line-height:1.5; }
     .step-panel { display: none; }
     .step-panel.active { display: block; }
 
@@ -414,6 +415,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <!-- Step 1: Intake -->
       <div class="step-panel active" id="step-1">
+        <p class="step-desc">Tell us exactly what you're looking for — brand preferences, budget, features, location. The more detail you share, the sharper our research will be.</p>
         <div class="chat-messages" id="intake-chat"></div>
         <div class="chat-input-row">
           <input class="chat-input" id="intake-input" placeholder="e.g. I want to buy a 1.5 ton split AC around 35-40K in Koramangala..."
@@ -424,6 +426,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <!-- Step 2: Research & Stores -->
       <div class="step-panel" id="step-2">
+        <p class="step-desc">We're scanning Google Search, Google Maps, DuckDuckGo and more to find the best products, deals and nearby stores for you.</p>
         <div id="research-loading" class="loading" style="display:none">
           <span class="spinner"></span>Researching product and finding nearby stores...
           <p style="font-size:.8rem;color:var(--text-light);margin-top:.25rem">This typically takes 15-30 seconds. Progress shown below.</p>
@@ -452,6 +455,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <!-- Step 3: Call Simulation -->
       <div class="step-panel" id="step-3">
+        <p class="step-desc">Preview the CallKaro agent in action. Play the shopkeeper while our agent calls to enquire about pricing, availability and negotiate on your behalf.</p>
         <div id="call-store-tabs"></div>
         <div id="call-area">
           <div class="call-status" id="call-status"><span class="dot dot-idle"></span>Select a store to start calling<span class="call-timer" id="call-timer"></span></div>
@@ -475,6 +479,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <!-- Step 4: Results -->
       <div class="step-panel" id="step-4">
+        <p class="step-desc">Here's the side-by-side breakdown — prices, extras, pros and cons — so you can pick the best deal at a glance.</p>
         <div id="analysis-loading" class="loading" style="display:none">
           <span class="spinner"></span>Comparing store quotes...
         </div>
@@ -793,26 +798,39 @@ HTML_PAGE = r"""<!DOCTYPE html>
       r.topics_to_cover.forEach(t => html += `<span class="tag tag-topic">${t}</span>`);
       html += `</div>`;
     }
+    // --- Always-visible sections ---
+    html += `<div class="research-item"><strong>Questions to Ask:</strong>`;
     if (r.questions_to_ask && r.questions_to_ask.length) {
-      html += `<div class="research-item"><strong>Questions to Ask:</strong><ul style="margin:.25rem 0 0 1.5rem;font-size:.85rem">`;
+      html += `<ul style="margin:.25rem 0 0 1.5rem;font-size:.85rem">`;
       r.questions_to_ask.forEach(q => html += `<li>${q}</li>`);
-      html += `</ul></div>`;
+      html += `</ul>`;
+    } else {
+      html += `<p style="color:#999;font-size:.85rem;margin:.25rem 0 0 0">No questions generated</p>`;
     }
+    html += `</div>`;
+
+    html += `<div class="research-item" style="margin-top:.5rem"><strong>Common Traps / Warnings:</strong> `;
     if (r.important_notes && r.important_notes.length) {
-      html += `<div class="research-item" style="margin-top:.5rem">`;
       r.important_notes.forEach(n => html += `<span class="tag tag-note">${n}</span> `);
-      html += `</div>`;
+    } else {
+      html += `<span style="color:#999;font-size:.85rem">None found</span>`;
     }
+    html += `</div>`;
+
+    html += `<div class="research-item" style="margin-top:.5rem"><strong>Competing Products:</strong>`;
     if (r.competing_products && r.competing_products.length) {
-      html += `<div class="research-item" style="margin-top:.5rem"><strong>Competing Products:</strong><ul style="margin:.25rem 0 0 1.5rem;font-size:.85rem">`;
+      html += `<ul style="margin:.25rem 0 0 1.5rem;font-size:.85rem">`;
       r.competing_products.forEach(p => {
         let li = p.name || '';
         if (p.price_range) li += ` (₹${p.price_range})`;
         if (p.pros) li += ` — ${p.pros}`;
         html += `<li>${li}</li>`;
       });
-      html += `</ul></div>`;
+      html += `</ul>`;
+    } else {
+      html += `<p style="color:#999;font-size:.85rem;margin:.25rem 0 0 0">None found</p>`;
     }
+    html += `</div>`;
     rc.innerHTML = html;
 
     // Research phase complete — stop inline progress feed
@@ -1449,10 +1467,13 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/healthz":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
+            health = agent_health()
+            is_healthy = health["status"] in ("healthy", "not_started")
+            code = 200 if is_healthy else 503
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b"ok")
+            self.wfile.write(json.dumps({"server": "ok", "agent_worker": health}).encode())
             return
         elif path == "/":
             self._serve_html()
