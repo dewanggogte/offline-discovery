@@ -210,28 +210,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     }
     #call-log:empty { display: none; }
 
-    /* Pipeline event log */
-    .event-log-wrap {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      background: #1a1a2e; color: #e0e0e0;
-      font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
-      font-size: .72rem; line-height: 1.5;
-      z-index: 100; transition: height 0.2s;
-      border-top: 2px solid var(--accent);
-    }
-    .event-log-wrap.collapsed { height: 32px; overflow: hidden; }
-    .event-log-wrap.expanded { height: 220px; }
-    .event-log-header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 4px 12px; cursor: pointer; user-select: none;
-      background: #12122a; color: #aaa; font-size: .7rem;
-    }
-    .event-log-header:hover { background: #1e1e3a; }
-    .event-log-body {
-      overflow-y: auto; height: calc(100% - 28px); padding: 4px 12px;
-    }
-    .ev { white-space: nowrap; }
-    .ev-time { color: #666; margin-right: 6px; }
+    /* Pipeline event phase badges (used by inline research progress) */
     .ev-phase {
       display: inline-block; min-width: 100px; padding: 0 6px;
       border-radius: 3px; text-align: center; margin-right: 6px;
@@ -245,10 +224,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     .ev-phase-analysis { background: #2a5a5a; color: #7af5e0; }
     .ev-phase-session { background: #4a4a4a; color: #ccc; }
     .ev-phase-prompt_builder { background: #3a3a5a; color: #a0a0f5; }
-    .ev-msg { color: #d0d0d0; }
-    .ev-warning .ev-msg { color: #f5c87a; }
-    .ev-error .ev-msg { color: #f57a7a; }
-    .ev-count { background: var(--accent); color: white; padding: 1px 7px; border-radius: 10px; font-size: .6rem; margin-left: 8px; }
     .call-status {
       padding: .5rem .75rem; border-radius: 4px;
       background: var(--surface); font-size: .85rem;
@@ -286,7 +261,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     .badge-red { background: #fde8e8; color: #a12828; }
 
     .links-section { padding-top: 1.5rem; border-top: 1px solid var(--border); margin-top: 2rem; }
-    .footer-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 2rem; }
+    .footer-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 2rem; text-align: center; }
     .footer-row > a { font-size: .85rem; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; color: var(--text-light); text-decoration: none; }
     .footer-row > a:hover { color: var(--accent); }
 
@@ -380,7 +355,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
       .viz-row { flex-direction: column; }
       .btn-row { flex-wrap: wrap; }
       .dgrid { grid-template-columns: 1fr; }
-      .event-log-wrap.expanded { height: 160px; }
       .modal-box { padding: 1.25rem; }
       #call-store-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .75rem; }
       #call-store-tabs .btn { font-size: .8rem; padding: .4rem .7rem; }
@@ -396,7 +370,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     <div class="tab-bar">
       <button class="tab-btn active" onclick="switchTab('pipeline')">Research</button>
-      <button class="tab-btn" onclick="switchTab('dashboard')">Dashboard</button>
+      <button class="tab-btn" onclick="switchTab('dashboard')">Dashboard (for nerds)</button>
     </div>
 
     <!-- Pipeline Tab -->
@@ -500,7 +474,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     <section class="links-section">
       <div class="footer-row">
-        <span style="font-size:.8rem;color:var(--text-light)">CallKaro — Voice Price Comparison</span>
+        <span style="font-size:.8rem;color:var(--text-light)">CallKaro — Voice agent for price comparison.<br>Code available on <a href="https://github.com/dewanggogte/CallKaro" target="_blank" rel="noopener" style="color:var(--accent)">GitHub</a>.</span>
       </div>
     </section>
   </div>
@@ -516,15 +490,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn btn-secondary" onclick="cancelConfirm()">Go Back</button>
       </div>
     </div>
-  </div>
-
-  <!-- Pipeline Event Log -->
-  <div class="event-log-wrap collapsed" id="event-log">
-    <div class="event-log-header" onclick="toggleEventLog()">
-      <span>Pipeline Log <span class="ev-count" id="ev-count" style="display:none">0</span></span>
-      <span id="ev-toggle-icon">&#9650;</span>
-    </div>
-    <div class="event-log-body" id="ev-body"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.js"></script>
@@ -547,23 +512,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
   const { Room, RoomEvent, Track } = LivekitClient;
 
   /* ================================================================
-     Pipeline Event Log
+     Pipeline Event Polling (feeds inline research progress)
      ================================================================ */
   let evSince = 0;
   let evPollTimer = null;
-  let evLogExpanded = false;
-
-  function toggleEventLog() {
-    const wrap = document.getElementById('event-log');
-    evLogExpanded = !evLogExpanded;
-    wrap.classList.toggle('collapsed', !evLogExpanded);
-    wrap.classList.toggle('expanded', evLogExpanded);
-    document.getElementById('ev-toggle-icon').innerHTML = evLogExpanded ? '&#9660;' : '&#9650;';
-    if (evLogExpanded) {
-      const body = document.getElementById('ev-body');
-      body.scrollTop = body.scrollHeight;
-    }
-  }
 
   let researchPhaseActive = false;
 
@@ -582,16 +534,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
       const resp = await fetch(`/api/session/${sessionId}/events?since=${evSince}`);
       const data = await resp.json();
       if (data.events && data.events.length > 0) {
-        const body = document.getElementById('ev-body');
-        const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 20;
         const progressEl = researchPhaseActive ? document.getElementById('research-progress') : null;
         data.events.forEach(ev => {
-          // Add to bottom pipeline log
-          const div = document.createElement('div');
-          div.className = 'ev' + (ev.level === 'warning' ? ' ev-warning' : '') + (ev.level === 'error' ? ' ev-error' : '');
-          div.innerHTML = `<span class="ev-time">${ev.time}</span><span class="ev-phase ev-phase-${ev.phase}">${ev.phase}</span><span class="ev-msg">${escHtml(ev.message)}</span>`;
-          body.appendChild(div);
-          // During research, also show inline progress for all pipeline events
           if (progressEl) {
             const item = document.createElement('div');
             item.className = 'progress-item';
@@ -603,12 +547,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
           }
         });
         evSince = data.total;
-        // Update count badge
-        const badge = document.getElementById('ev-count');
-        badge.textContent = data.total;
-        badge.style.display = 'inline';
-        // Auto-scroll if at bottom
-        if (wasAtBottom) body.scrollTop = body.scrollHeight;
       }
     } catch(e) { /* ignore polling errors */ }
   }
@@ -746,9 +684,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     // Enable inline progress feed from the shared event poller
     researchPhaseActive = true;
-
-    // Auto-expand the event log so user can see what's happening
-    if (!evLogExpanded) toggleEventLog();
 
     try {
       // POST triggers research in background thread — returns immediately
@@ -1192,8 +1127,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     storesData = [];
     lastTranscriptCount = 0;
     evSince = 0;
-    document.getElementById('ev-body').innerHTML = '';
-    document.getElementById('ev-count').style.display = 'none';
     document.getElementById('intake-chat').innerHTML = '';
     document.getElementById('call-transcript').innerHTML = '';
     document.getElementById('store-counter').style.display = 'none';
