@@ -77,6 +77,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <script>
     (function(){var t=localStorage.getItem('theme');var d=t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches);if(d)document.documentElement.classList.add('dark');})();
   </script>
+  <script defer src="https://cloud.umami.is/script.js" data-website-id="0b1107f0-d2d1-4de6-8ddc-a26c68b4dca3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
     :root {
@@ -617,12 +618,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
       b.classList.toggle('active', tabs[i] === name);
     });
     if (name === 'dashboard' && !dashLoaded) loadDashboard();
+    if (typeof umami !== 'undefined') umami.track('tab-switch', { tab: name });
   }
 
   /* ================================================================
      Step navigation
      ================================================================ */
   let highestStep = 1;
+  const STEP_NAMES = ['', 'tell-us', 'research', 'call', 'results'];
   function goToStep(n) {
     if (n > highestStep) highestStep = n;
     for (let i = 1; i <= 4; i++) {
@@ -631,6 +634,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       si.classList.toggle('active', i === n);
       si.classList.toggle('done', i < n && i <= highestStep);
     }
+    if (typeof umami !== 'undefined') umami.track('step', { name: STEP_NAMES[n], number: n });
   }
 
   function navToStep(n) {
