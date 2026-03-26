@@ -198,6 +198,34 @@ Research the current market prices, key features, and prepare questions for call
         logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
         break
 
+    # Final call without tools — forces the LLM to produce <research> output
+    # instead of requesting more searches
+    logger.info("Forcing final LLM call without tools to get structured output...")
+    messages.append({
+        "role": "user",
+        "content": "You've done enough research. Now provide your findings in the <research> JSON format as specified. Do NOT request any more searches.",
+    })
+    try:
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model=CLAUDE_MODEL,
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        )
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        full_text = "\n".join(text_blocks)
+        match = _RESEARCH_RE.search(full_text)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                logger.info("Research complete (forced final round)")
+                return ResearchOutput.from_dict(data)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"Failed to parse research JSON in final round: {e}")
+    except Exception as e:
+        logger.error(f"Anthropic API error in final round: {e}")
+
     # Fallback: return minimal research output
     logger.warning("Research did not produce structured output, returning defaults")
     return ResearchOutput(
