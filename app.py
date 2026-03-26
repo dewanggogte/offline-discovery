@@ -23,11 +23,14 @@ Endpoints:
 
 import asyncio
 import atexit
+import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import uuid
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -47,6 +50,22 @@ LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 
 PORT = 8080
+
+# Build info — computed once at import time
+def _build_info() -> dict:
+    """Return git short-sha and startup timestamp for build verification."""
+    sha = "dev"
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).parent), timeout=3,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        pass
+    return {"sha": sha, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+
+_BUILD = _build_info()
 
 # In-memory session storage
 _sessions: dict = {}  # session_id → PipelineSession
@@ -70,6 +89,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CallKaro — Product Research Pipeline</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b85a3b'/%3E%3Cpath d='M9 12.5c0-1.1.4-2.2 1-3a10 10 0 0 0 3 6.5 10 10 0 0 0 6.5 3c-.8.6-1.9 1-3 1A7.5 7.5 0 0 1 9 12.5z' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'/%3E%3Cpath d='M10 9.5A7.5 7.5 0 0 1 22.5 22' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'/%3E%3Ccircle cx='10' cy='9.5' r='1.5' fill='%23fff'/%3E%3Ccircle cx='22.5' cy='22' r='1.5' fill='%23fff'/%3E%3C/svg%3E" />
+  <meta name="theme-color" content="#b85a3b" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1a1917" media="(prefers-color-scheme: dark)" />
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
@@ -78,6 +100,27 @@ HTML_PAGE = r"""<!DOCTYPE html>
       --accent: #b85a3b; --accent-hover: #9a4830;
       --border: #e8e6e3; --surface: #f5f3f0; --surface-dark: #eae7e3;
       --green: #4a9; --red: #c0392b; --yellow: #b8860b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1917; --text: #e0ddd8; --text-light: #9a9590;
+        --accent: #d4794e; --accent-hover: #e08a5c;
+        --border: #2e2c28; --surface: #222120; --surface-dark: #2a2826;
+        --green: #5bc49a; --red: #e05d50; --yellow: #d4a730;
+      }
+      .chat-msg.assistant .bubble { background: var(--surface); }
+      .store-card.selected { background: #2a2520; }
+      .tag-topic { background: #1a3028; color: #5bc49a; }
+      .tag-note { background: #2e2610; color: #d4a730; }
+      .research-progress { background: var(--surface); }
+      .badge-green { background: #1a3028; color: #5bc49a; }
+      .badge-red { background: #2e1a18; color: #e05d50; }
+      .results-table tr.best-deal { background: #1a2e22; }
+      .savings-note { color: #5bc49a; background: #1a2e22; border-color: #2a4032; }
+      .rank-1 { background: #b8960a; color: #1a1917; }
+      .rank-2 { background: #888; color: #1a1917; }
+      .rank-3 { background: #a06028; color: #fff; }
+      .modal-overlay { background: rgba(0,0,0,.65); }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -236,7 +279,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
     /* Results table */
-    .results-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    .results-table { width: 100%; border-collapse: collapse; font-size: .85rem; font-variant-numeric: tabular-nums; }
     .results-table th { text-align: left; padding: 8px; color: var(--text-light); border-bottom: 1px solid var(--border); font-weight: 500; }
     .results-table td { padding: 8px; border-bottom: 1px solid var(--border); }
     .rank-badge { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; font-size: .75rem; font-weight: 600; }
@@ -254,9 +297,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
     .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
     .dcard { background: var(--bg); border-radius: 4px; padding: 1rem; border: 1px solid var(--border); }
     .dcard-wide { grid-column: 1 / -1; }
-    .stat { font-size: 1.8rem; font-weight: 600; }
+    .stat { font-size: 1.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
     .stat-label { font-size: .8rem; color: var(--text-light); margin-top: 2px; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 500; }
+    .stat-row { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: .5rem; font-size: .8rem; color: var(--text-light); font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 500; font-variant-numeric: tabular-nums; }
     .badge-green { background: #e6f4ea; color: #1a7a3a; }
     .badge-red { background: #fde8e8; color: #a12828; }
 
@@ -476,6 +520,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="footer-row">
         <span style="font-size:.8rem;color:var(--text-light)">CallKaro — Voice agent for price comparison.<br>Code available on <a href="https://github.com/dewanggogte/CallKaro" target="_blank" rel="noopener" style="color:var(--accent)">GitHub</a>.</span>
       </div>
+      <div id="build-info" style="text-align:center;margin-top:.75rem;font-size:.65rem;color:var(--text-light);font-variant-numeric:tabular-nums;opacity:.6"></div>
     </section>
   </div>
 
@@ -510,6 +555,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
   let lastTranscriptCount = 0;
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const { Room, RoomEvent, Track } = LivekitClient;
+  const _dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const _chartGrid = _dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05)';
+  const _chartTick = _dark ? '#777' : '#999';
 
   /* ================================================================
      Pipeline Event Polling (feeds inline research progress)
@@ -660,9 +708,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     suggestions.forEach(s => {
       const chip = document.createElement('button');
       chip.textContent = s;
-      chip.style.cssText = 'padding:6px 14px;border-radius:16px;border:1px solid var(--primary);background:var(--bg);color:var(--primary);font-size:.85rem;cursor:pointer;transition:all .15s;';
-      chip.onmouseenter = () => { chip.style.background = 'var(--primary)'; chip.style.color = '#fff'; };
-      chip.onmouseleave = () => { chip.style.background = 'var(--bg)'; chip.style.color = 'var(--primary)'; };
+      chip.style.cssText = 'padding:6px 14px;border-radius:16px;border:1px solid var(--accent);background:var(--bg);color:var(--accent);font-size:.85rem;cursor:pointer;transition:all .15s;';
+      chip.onmouseenter = () => { chip.style.background = 'var(--accent)'; chip.style.color = '#fff'; };
+      chip.onmouseleave = () => { chip.style.background = 'var(--bg)'; chip.style.color = 'var(--accent)'; };
       chip.onclick = () => {
         document.getElementById('intake-input').value = s;
         chipRow.remove();
@@ -740,7 +788,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       r.questions_to_ask.forEach(q => html += `<li>${q}</li>`);
       html += `</ul>`;
     } else {
-      html += `<p style="color:#999;font-size:.85rem;margin:.25rem 0 0 0">No questions generated</p>`;
+      html += `<p style="color:var(--text-light);font-size:.85rem;margin:.25rem 0 0 0">No questions generated</p>`;
     }
     html += `</div>`;
 
@@ -748,7 +796,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     if (r.important_notes && r.important_notes.length) {
       r.important_notes.forEach(n => html += `<span class="tag tag-note">${n}</span> `);
     } else {
-      html += `<span style="color:#999;font-size:.85rem">None found</span>`;
+      html += `<span style="color:var(--text-light);font-size:.85rem">None found</span>`;
     }
     html += `</div>`;
 
@@ -763,7 +811,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       });
       html += `</ul>`;
     } else {
-      html += `<p style="color:#999;font-size:.85rem;margin:.25rem 0 0 0">None found</p>`;
+      html += `<p style="color:var(--text-light);font-size:.85rem;margin:.25rem 0 0 0">None found</p>`;
     }
     html += `</div>`;
     rc.innerHTML = html;
@@ -963,7 +1011,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   function callLog(msg, cls) {
     const el = document.getElementById('call-log');
     const ts = new Date().toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    el.innerHTML += `<div style="color:${cls==='error'?'var(--red)':cls==='info'?'#4a7a5b':'var(--text-light)'}"><span style="color:var(--text-light)">${ts}</span> ${msg}</div>`;
+    el.innerHTML += `<div style="color:${cls==='error'?'var(--red)':cls==='info'?'var(--green)':'var(--text-light)'}"><span style="color:var(--text-light)">${ts}</span> ${msg}</div>`;
     el.scrollTop = el.scrollHeight;
   }
 
@@ -1151,7 +1199,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     const bars = 24, step = Math.floor(buf.length/bars), bw = W/bars-1;
     for (let i=0;i<bars;i++) {
       const v = buf[i*step]/255, h = Math.max(2,v*H);
-      ctx.fillStyle = v>.05 ? color : '#e8e6e3';
+      ctx.fillStyle = v>.05 ? color : (_dark ? '#2e2c28' : '#e8e6e3');
       ctx.fillRect(i*(bw+1),H-h,bw,h);
     }
   }
@@ -1226,7 +1274,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">Time to First Token</h3>
             <div class="stat">${m.ttft.avg}s</div>
             <div class="stat-label">Average TTFT</div>
-            <div style="display:flex;gap:1rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>P50: ${m.ttft.p50}s</span>
               <span>P95: ${m.ttft.p95}s</span>
               <span>Min: ${m.ttft.min}s</span>
@@ -1237,7 +1285,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">LLM Response Duration</h3>
             <div class="stat">${m.llm_duration.avg}s</div>
             <div class="stat-label">Average</div>
-            <div style="display:flex;gap:1rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>P50: ${m.llm_duration.p50}s</span>
               <span>P95: ${m.llm_duration.p95}s</span>
             </div>
@@ -1246,7 +1294,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">Turn Latency</h3>
             <div class="stat">${m.turn_latency.avg}s</div>
             <div class="stat-label">User speech to agent response</div>
-            <div style="display:flex;gap:1rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>P50: ${m.turn_latency.p50}s</span>
               <span>P95: ${m.turn_latency.p95}s</span>
             </div>
@@ -1259,7 +1307,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">Total Tokens Used</h3>
             <div class="stat">${totalTokens.toLocaleString()}</div>
             <div class="stat-label">Across all calls</div>
-            <div style="display:flex;gap:1.5rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>Prompt: ${totalPrompt.toLocaleString()}</span>
               <span>Completion: ${totalCompletion.toLocaleString()}</span>
             </div>
@@ -1268,7 +1316,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">Tokens per Turn</h3>
             <div class="stat">${m.prompt_tokens.avg}</div>
             <div class="stat-label">Avg prompt tokens</div>
-            <div style="display:flex;gap:1.5rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>Avg completion: ${m.completion_tokens.avg}</span>
               <span>Max prompt: ${m.prompt_tokens.max}</span>
             </div>
@@ -1277,7 +1325,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <h3 style="font-size:.9rem;font-weight:500">Conversation</h3>
             <div class="stat">${m.conv_duration.avg}s</div>
             <div class="stat-label">Avg call duration</div>
-            <div style="display:flex;gap:1.5rem;margin-top:.5rem;font-size:.8rem;color:var(--text-light)">
+            <div class="stat-row">
               <span>Avg msgs: ${m.msg_counts.avg}</span>
               <span>Max: ${m.conv_duration.max}s</span>
             </div>
@@ -1318,7 +1366,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         ttftChart = new Chart(document.getElementById('dashTtft'), {
           type: 'bar',
           data: { labels: ttftData.map((_,i) => 'T'+(i+1)), datasets: [{ label: 'TTFT (s)', data: ttftData, backgroundColor: 'rgba(184,90,59,0.7)', borderRadius: 3 }] },
-          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { color: '#999', font:{size:10} } }, x: { grid: { display: false }, ticks: { color: '#999', maxRotation: 0, autoSkip: true, maxTicksLimit: 25, font:{size:10} } } } }
+          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: _chartGrid }, ticks: { color: _chartTick, font:{size:10} } }, x: { grid: { display: false }, ticks: { color: _chartTick, maxRotation: 0, autoSkip: true, maxTicksLimit: 25, font:{size:10} } } } }
         });
       }
 
@@ -1332,7 +1380,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             { label: 'Prompt', data: pt, backgroundColor: 'rgba(184,90,59,0.7)', borderRadius: 3 },
             { label: 'Completion', data: ct, backgroundColor: 'rgba(74,153,153,0.7)', borderRadius: 3 }
           ]},
-          options: { responsive: true, plugins: { legend: { labels: { color: '#999', font:{size:10} } } }, scales: { y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { color: '#999', font:{size:10} } }, x: { stacked: true, grid: { display: false }, ticks: { color: '#999', maxRotation: 0, autoSkip: true, maxTicksLimit: 25, font:{size:10} } } } }
+          options: { responsive: true, plugins: { legend: { labels: { color: _chartTick, font:{size:10} } } }, scales: { y: { stacked: true, beginAtZero: true, grid: { color: _chartGrid }, ticks: { color: _chartTick, font:{size:10} } }, x: { stacked: true, grid: { display: false }, ticks: { color: _chartTick, maxRotation: 0, autoSkip: true, maxTicksLimit: 25, font:{size:10} } } } }
         });
       }
 
@@ -1343,7 +1391,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         latencyChart = new Chart(document.getElementById('dashLatency'), {
           type: 'line',
           data: { labels: latData.map((_,i) => 'T'+(i+1)), datasets: [{ label: 'Turn Latency (s)', data: latData, borderColor: '#b85a3b', backgroundColor: 'rgba(184,90,59,0.1)', fill: true, tension: 0.3, pointRadius: 2 }] },
-          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { color: '#999', font:{size:10} } }, x: { grid: { display: false }, ticks: { color: '#999', maxRotation: 0, autoSkip: true, maxTicksLimit: 30, font:{size:10} } } } }
+          options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: _chartGrid }, ticks: { color: _chartTick, font:{size:10} } }, x: { grid: { display: false }, ticks: { color: _chartTick, maxRotation: 0, autoSkip: true, maxTicksLimit: 30, font:{size:10} } } } }
         });
       }
 
@@ -1496,7 +1544,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(HTML_PAGE.encode())
+        # Inject build info script before closing </body>
+        build_script = (
+            f'<script>document.getElementById("build-info").textContent='
+            f'"build {_BUILD["sha"]} · {_BUILD["ts"]}";</script>'
+        )
+        page = HTML_PAGE.replace("</body>", build_script + "</body>")
+        self.wfile.write(page.encode())
 
     def _create_session(self):
         from pipeline.session import PipelineSession
