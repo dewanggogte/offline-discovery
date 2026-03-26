@@ -64,7 +64,6 @@ def build_prompt(
     Returns:
         Complete system prompt string for the voice agent.
     """
-    product_desc = requirements.category or requirements.product_type
     casual = _casual_product_name(requirements)
     store_type = _infer_store_type(requirements.product_type)
 
@@ -188,7 +187,7 @@ CRITICAL OUTPUT RULES:
 
 {examples}
 
-PRODUCT: {product_desc}
+PRODUCT: {casual}
 STORE: {store.name}{area_line}{price_note}{greeting_note}
 """
 
