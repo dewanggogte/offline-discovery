@@ -23,6 +23,8 @@ def _casual_product_name(requirements: ProductRequirements) -> str:
 
     "Medium double door fridge with separate freezer section (220-280L)"
     → "double door fridge"
+    "250-300L double door fridge" → "double door fridge"
+    "1.5 ton split AC" → "split AC"
 
     Falls back to product_type if the result is too short (<3 chars).
     """
@@ -31,12 +33,48 @@ def _casual_product_name(requirements: ProductRequirements) -> str:
     name = re.sub(r"\s*\([^)]*\)", "", name)
     # Strip "with ..." clauses
     name = re.sub(r"\s+with\s+.*", "", name, flags=re.IGNORECASE)
+    # Strip inline capacity/size specs: "250-300L", "450L", "1.5 ton", "7kg", "55 inch"
+    name = re.sub(r"\d[\d.,]*\s*-\s*\d[\d.,]*\s*(L|litre|litres|kg|ton|inch)\b", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\d[\d.,]*\s*(L|litre|litres|kg|ton|inch)\b", "", name, flags=re.IGNORECASE)
+    # Strip "manual defrost", "frost-free", "inverter" and similar tech qualifiers
+    name = re.sub(r"\b(manual\s+defrost|frost[- ]?free|inverter|direct\s+cool)\b", "", name, flags=re.IGNORECASE)
     # Strip leading size adjectives
     name = _SIZE_ADJECTIVES.sub("", name)
-    name = name.strip()
+    # Strip leading/trailing commas, spaces, hyphens left over
+    name = re.sub(r"^[\s,\-]+|[\s,\-]+$", "", name)
+    name = re.sub(r"\s{2,}", " ", name).strip()
     if len(name) < 3:
         name = requirements.product_type
     return name
+
+
+def _extract_brand(product_name: str) -> str:
+    """Extract just the brand name from a research product name.
+
+    "LG GL-T382VESX" → "LG"
+    "Samsung RT38DG5A2BBX 490L" → "Samsung"
+    "Godrej RD EDGE 280 TDI" → "Godrej"
+    "Whirlpool 500L Double Door" → "Whirlpool"
+    """
+    if not product_name:
+        return ""
+    # First word is almost always the brand
+    brand = product_name.split()[0]
+    # Strip trailing punctuation
+    brand = brand.rstrip(".,;:-")
+    return brand
+
+
+def _tts_safe(text: str) -> str:
+    """Make text safe for TTS — expand abbreviations the engine would spell out.
+
+    "500L" → "500 litre", "1.5T" → "1.5 ton", "7kg" → "7 kg"
+    """
+    # Expand capacity abbreviations
+    text = re.sub(r"(\d)\s*L\b", r"\1 litre", text)
+    text = re.sub(r"(\d)\s*kg\b", r"\1 kg", text, flags=re.IGNORECASE)
+    text = re.sub(r"(\d)\s*T\b", r"\1 ton", text)
+    return text
 
 
 def build_greeting(requirements: ProductRequirements, store: DiscoveredStore) -> str:
@@ -181,6 +219,10 @@ CRITICAL OUTPUT RULES:
   RIGHT: Shopkeeper says "39000" → you say "Achha, 39000." (exact same number)
   WRONG: Shopkeeper says "2 years warranty" → you say "1 saal" (WRONG number)
   RIGHT: Shopkeeper says "2 years warranty" → you say "Achha, 2 saal."
+- NEVER say model numbers or alphanumeric codes like "GL-T382VESX" or "RT38DG5A2BBX". A real customer never does this on a phone call. Just say the brand name: "LG ka double door" or "Samsung wala".
+- Write "litre" not "L", "ton" not "T", "kg" not "KG". Abbreviations get spelled out letter-by-letter by TTS.
+  WRONG: "350L ka fridge" (TTS says "three fifty ell")
+  RIGHT: "350 litre ka fridge"
 - Do NOT write action markers like *pauses* or (laughs)
 - Do NOT write "[end_call]" as text. Use the actual end_call tool function when you want to end the call.
 - Only output the exact words you would speak. Nothing else.
@@ -259,43 +301,42 @@ def _build_research_sections(research: ResearchOutput) -> str:
     """
     parts = []
 
-    # PRODUCT KNOWLEDGE — summary + top 3 competing products
+    # PRODUCT KNOWLEDGE — summary + top competing products (brand only, no model codes)
     knowledge_lines = []
     if research.product_summary:
-        knowledge_lines.append(research.product_summary)
+        knowledge_lines.append(_tts_safe(research.product_summary))
     for cp in research.competing_products[:5]:
         name = cp.get("name", "")
         price_range = cp.get("price_range", "")
         pros = cp.get("pros", "")
-        if name:
-            line = f"- {name}"
+        brand = _extract_brand(name)
+        if brand:
+            line = f"- {brand}"
             if price_range:
-                line += f" ({price_range})"
+                line += f" ({_tts_safe(price_range)})"
             if pros:
                 line += f" — {pros}"
             knowledge_lines.append(line)
     if knowledge_lines:
         parts.append("PRODUCT KNOWLEDGE:\n" + "\n".join(knowledge_lines)
-                      + "\nIf shopkeeper asks 'which model?', name one of these.")
+                      + '\nIf shopkeeper asks "which model?", just say the brand name like "LG ka double door dikhao".')
 
-    # RECOMMENDED PRODUCTS — top picks from research
+    # RECOMMENDED PRODUCTS — top picks (brand + price only, no model codes)
     if research.recommended_products:
         rec_lines = []
         for rp in research.recommended_products[:3]:
             model = rp.get("model", "")
             street_price = rp.get("street_price", "")
-            specs = rp.get("specs", "")
-            if model:
-                line = f"- {model}"
+            brand = _extract_brand(model)
+            if brand:
+                line = f"- {brand}"
                 if street_price:
                     line += f" (~{street_price} online)"
-                if specs:
-                    line += f" — {specs}"
                 rec_lines.append(line)
         if rec_lines:
             parts.append(
                 "RECOMMENDED PRODUCTS:\n" + "\n".join(rec_lines)
-                + '\nCasually mention these if relevant: "Maine online dekha tha [model] ka price..."'
+                + '\nCasually mention these if relevant: "Maine online dekha tha [brand] ka price..."'
             )
 
     # NEGOTIATION INTELLIGENCE — margins, seasonal info, tactics
@@ -331,16 +372,16 @@ def _build_research_sections(research: ResearchOutput) -> str:
         parts.append("BUYER NOTES:\n" + "\n".join(note_lines))
 
     # WHEN STUCK — strategies for conversation recovery
-    first_model = ""
+    first_brand = ""
     if research.recommended_products:
-        first_model = research.recommended_products[0].get("model", "")
-    if not first_model and research.competing_products:
-        first_model = research.competing_products[0].get("name", "")
-    if first_model or research.product_summary:
+        first_brand = _extract_brand(research.recommended_products[0].get("model", ""))
+    if not first_brand and research.competing_products:
+        first_brand = _extract_brand(research.competing_products[0].get("name", ""))
+    if first_brand or research.product_summary:
         stuck_lines = []
-        if first_model:
+        if first_brand:
             stuck_lines.append(
-                f'- If shopkeeper asks "which model?", say: "{first_model} ka price kya hai?"'
+                f'- If shopkeeper asks "which model?", say: "{first_brand} ka dikhao" or "{first_brand} ka price kya hai?"'
             )
         stuck_lines.append(
             '- If you fail to get an answer after 2 attempts, say "Achha theek hai" and move to the next topic.'
@@ -447,13 +488,13 @@ def _build_negotiation_section(research: ResearchOutput) -> str:
     if ni.get("bundle_tricks"):
         lines.append(f'- Watch out for: {ni["bundle_tricks"]}')
 
-    # Recommended product knowledge as leverage
+    # Recommended product knowledge as leverage (brand only, no model codes)
     if research.recommended_products:
-        model = research.recommended_products[0].get("model", "")
+        brand = _extract_brand(research.recommended_products[0].get("model", ""))
         price = research.recommended_products[0].get("street_price", "")
-        if model and price:
+        if brand and price:
             lines.append(
-                f'- If relevant, mention: "{model} ka online price {price} dikh raha tha"'
+                f'- If relevant, mention: "{brand} ka online price {price} dikh raha tha"'
             )
 
     lines.append('- Keep negotiation GENTLE — you are a savvy buyer, not aggressive.')
@@ -474,14 +515,14 @@ def _build_examples(requirements: ProductRequirements, research: ResearchOutput)
         mid = (research.market_price_range[0] + research.market_price_range[1]) // 2
         price = str(mid)
 
-    # "Which model?" recovery example using first competing product
+    # "Which model?" recovery example using brand name only
     model_recovery = ""
     if research.competing_products:
-        model_name = research.competing_products[0].get("name", "")
-        if model_name:
+        brand = _extract_brand(research.competing_products[0].get("name", ""))
+        if brand:
             model_recovery = (
                 f'\nShopkeeper: "Kaun sa model chahiye?"'
-                f'\nYou: "Achha, {model_name} ka kya price hai?"'
+                f'\nYou: "Achha, {brand} ka {casual} dikhao, price kya hai?"'
             )
 
     return f"""EXAMPLES:
