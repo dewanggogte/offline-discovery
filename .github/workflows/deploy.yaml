@@ -33,18 +33,28 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Install ArgoCD CLI
-        run: |
-          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x argocd
-          sudo mv argocd /usr/local/bin/
-
-      - name: Trigger rollout restart
+      - name: Trigger rollout restart via REST API
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
           ARGOCD_APP: ${{ secrets.ARGOCD_APP }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
         run: |
-          argocd app actions run "$ARGOCD_APP" restart --kind Deployment \
-            --server "$ARGOCD_SERVER" \
-            --grpc-web
+          # Sync the app (pulls latest image)
+          curl -sf -X POST \
+            "https://${ARGOCD_SERVER}/api/v1/applications/${ARGOCD_APP}/sync" \
+            -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"prune":false}' \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 10 || true
+
+          # Restart the deployment
+          curl -sf -X POST \
+            "https://${ARGOCD_SERVER}/api/v1/applications/${ARGOCD_APP}/resource/actions?namespace=callkaro&resourceName=callkaro&version=v1&kind=Deployment&group=apps" \
+            -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '"restart"' \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 10
