@@ -39,14 +39,17 @@ jobs:
           ARGOCD_APP: ${{ secrets.ARGOCD_APP }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
         run: |
-          # Sync with replace strategy to force K8s to pull the new :latest image
+          # Patch deployment with a restart annotation to force new image pull
+          PATCH="{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}}}"
+          BODY=$(echo "$PATCH" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+
           curl -sf -X POST \
-            "https://${ARGOCD_SERVER}/api/v1/applications/${ARGOCD_APP}/sync" \
+            "https://${ARGOCD_SERVER}/api/v1/applications/${ARGOCD_APP}/resource?namespace=callkaro&resourceName=callkaro&version=v1&kind=Deployment&group=apps&patchType=application%2Fstrategic-merge-patch%2Bjson" \
             -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{"strategy":{"apply":{"force":true}},"prune":false}' \
-            --max-time 60 \
+            -d "$BODY" \
+            --max-time 30 \
             --retry 3 \
-            --retry-delay 15
+            --retry-delay 10
 
-          echo "Sync triggered — ArgoCD will roll out the new image"
+          echo "Rollout restart triggered"
